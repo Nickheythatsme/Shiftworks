@@ -4,7 +4,7 @@ import { runAgent } from '../src/agent/agent';
 import { TOOLS, ToolError, headlessHost, problems, runTool } from '../src/agent/tools';
 import { GOALS, itemId } from '../src/content/content';
 import { HUB_X, HUB_Y, Sim } from '../src/sim';
-import { BELT, KILN, MINER, SOUTH, place, testSim } from './helpers';
+import { BELT, KILN, MINER, SAWMILL, SOUTH, place, testSim } from './helpers';
 
 // The AI player's tools, driven directly with no model involved, and the loop
 // driven by a scripted stand-in for the model.
@@ -26,15 +26,16 @@ describe('agent tools', () => {
   it('describes a new game', async () => {
     const host = headlessHost(new Sim({ seed: 3 }));
     const state = await runTool(host, 'get_state', {});
-    expect(state).toContain('Delivery list 1 of 7');
-    expect(state).toContain('timber 0/20');
+    expect(state).toContain('Gate 1 of 2');
+    expect(state).toContain('planks 0/100 per minute SHORT');
+    expect(state).toContain('sawmill (costs 80 timber; not enough stock yet)');
     expect(state).toContain('belt (1 timber)');
     expect(state).toContain('Problems: none detected.');
     expect(await runTool(host, 'find_deposits', { resource: 'timber' })).toContain('nearest tile to the hub');
     expect(await runTool(host, 'view_map', { x: 0, y: 0, radius: 3 })).toContain('H H H');
   });
 
-  it('completes the first delivery list with a miner and a routed belt', async () => {
+  it('delivers timber with a miner and a routed belt, then buys the sawmill', async () => {
     const sim = new Sim({ seed: 3 });
     const host = headlessHost(sim);
     const [x, y] = depositNear(sim, 'timber');
@@ -44,10 +45,14 @@ describe('agent tools', () => {
     expect(routed).toContain('Its output goes to the hub');
     expect(problems(sim)).toEqual([]);
     let report = '';
-    for (let i = 0; i < 3 && sim.goalIndex === 0; i++) report = await runTool(host, 'wait', { seconds: 60 });
-    expect(sim.goalIndex).toBe(1);
-    expect(report).toContain('DELIVERY LIST COMPLETE');
-    expect(report).toContain('sawmill (building)');
+    await expect(runTool(host, 'research', { tech: 'sawmill' })).rejects.toThrow('Not enough timber');
+    for (let i = 0; i < 3; i++) report = await runTool(host, 'wait', { seconds: 60 });
+    expect(report).toContain('sawmill (costs 80 timber; CAN BUY NOW)');
+    const learned = await runTool(host, 'research', { tech: 'sawmill' });
+    expect(learned).toContain('sawmill (building');
+    expect(learned).toContain('planks (recipe');
+    expect(sim.unlockedBuildings[SAWMILL]).toBe(1);
+    await expect(runTool(host, 'research', { tech: 'sawmill' })).rejects.toThrow('already known');
   });
 
   it('routes around obstacles and never onto another building\'s output tile', async () => {
@@ -163,7 +168,7 @@ describe('agent loop', () => {
     ]);
     const events: string[] = [];
     const result = await runAgent({ client, host: headlessHost(sim), maxTurns: 5, onEvent: (e) => events.push(e.type === 'tool' ? `${e.name}:${e.error}` : e.type) });
-    expect(sim.goalIndex).toBe(1);
+    expect(sim.delivered[itemId('timber')]).toBeGreaterThan(20);
     expect(result.reason).toBe('turn_limit');
     expect(result.usage.turns).toBe(5);
     expect(events.filter((e) => e.includes(':'))).toEqual(['get_state:false', 'build:false', 'connect:false', 'build:true', 'wait:false']);

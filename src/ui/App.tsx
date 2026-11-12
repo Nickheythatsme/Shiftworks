@@ -16,12 +16,12 @@ function clock(seconds: number): string {
   return (h ? `${h}:${String(m).padStart(2, '0')}` : `${m}`) + `:${String(s).padStart(2, '0')}`;
 }
 
-function TownPanel({ state }: { state: UiState }) {
+function TownPanel({ game, state }: { game: Game; state: UiState }) {
   return (
     <section className="panel town">
       <header>
         <span className="stage">{state.stage}</span>
-        <span className="muted">Delivery {state.goalNumber} of {state.goalCount}</span>
+        <span className="muted">{state.goalNumber > state.goalCount ? 'Every stage reached' : `Stage ${state.goalNumber} of ${state.goalCount + 1}`}</span>
       </header>
       <h2>{state.goalTitle}</h2>
       <p className="muted">{state.goalText}</p>
@@ -37,13 +37,44 @@ function TownPanel({ state }: { state: UiState }) {
       {state.gate && (
         <div className="need gate">
           <div className="need-row">
-            <span>{state.gate.running ? 'Holding' : state.gate.held > 0 ? 'Paused: a rate dropped' : 'Starts when every rate is met'}</span>
+            <span>
+              {state.gate.running ? 'Holding'
+                : state.uses.some((u) => u.short) ? 'Paused: the town is short'
+                : state.gate.held > 0 ? 'Paused: a rate dropped' : 'Starts when every rate is met'}
+            </span>
             <span className={state.gate.running ? 'done' : ''}>{clock(state.gate.held)} / {clock(state.gate.hold)}</span>
           </div>
           <div className="bar"><div className={state.gate.running ? 'hold running' : 'hold'} style={{ width: `${(100 * state.gate.held) / state.gate.hold}%` }} /></div>
         </div>
       )}
       {state.rewards.length > 0 && <p className="reward">Unlocks: {state.rewards.join(', ')}</p>}
+      {state.uses.length > 0 && (
+        <div className="stock">
+          <span className="muted">The town uses, per minute, from the hub</span>
+          {state.uses.map((u) => (
+            <span key={u.name} className={u.short ? 'short' : ''} title={u.short ? `${u.name}: the hub has none` : u.name}>
+              <i className="swatch" style={{ background: u.color }} />{u.name} {u.perMinute}{u.short ? ' (none left)' : ''}
+            </span>
+          ))}
+        </div>
+      )}
+      {state.techs.length > 0 && (
+        <div className="techs">
+          <span className="muted">The town can learn</span>
+          {state.techs.map((t) => (
+            <button key={t.id} className={t.blocked ? 'poor' : 'ready'} onClick={() => game.research(t.id)} title={t.text}>
+              <span className="tech-name"><strong>{t.name}</strong><small>{t.blocked || 'Buy'}</small></span>
+              <span className="cost">
+                {t.cost.map((c) => (
+                  <span key={c.name} className={c.enough ? '' : 'short'}>
+                    <i className="swatch" style={{ background: c.color }} />{c.count} {c.name.toLowerCase()}
+                  </span>
+                ))}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
       {state.arriving.length > 0 && (
         <div className="stock">
           <span className="muted">Arriving at the hub, per minute</span>
@@ -247,7 +278,7 @@ export function App({ game, ai }: { game: Game; ai: AiSession }) {
   return (
     <>
       <div className="top-left">
-        <TownPanel state={state} />
+        <TownPanel game={game} state={state} />
         <Selected game={game} state={state} />
       </div>
       <TopRight game={game} state={state} ai={ai} />
@@ -258,8 +289,8 @@ export function App({ game, ai }: { game: Game; ai: AiSession }) {
       {state.won && (
         <div className="win">
           <section className="panel">
-            <h1>The hamlet thrives</h1>
-            <p>Every delivery list is complete, in {clock(state.seconds)} of game time.</p>
+            <h1>The village stands</h1>
+            <p>The town passed its last gate in {clock(state.seconds)} of game time.</p>
             <p className="muted">This is the end of the first version. The factory keeps running if you want to keep building.</p>
             <button className="active" onClick={() => game.dismissWin()}>Keep building</button>
           </section>

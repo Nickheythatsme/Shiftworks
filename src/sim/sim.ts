@@ -10,14 +10,19 @@ import {
   BELT_SLOT_SECONDS,
   BUILDINGS,
   BUILDING_BY_ID,
+  FINAL_CONSUMES,
   GOALS,
   ITEM_BY_ID,
+  ITEM_BY_KEY,
   ITEM_COUNT,
   MINER_SECONDS,
   RATE_WINDOW_SECONDS,
   RECIPES,
   STARTING_STOCK,
   STARTING_UNLOCKS,
+  TECHS,
+  TECH_BY_ID,
+  TECH_BY_KEY,
   TICKS_PER_SECOND,
   buildingId,
   itemId,
@@ -68,10 +73,12 @@ export type Command =
   | { type: 'place'; building: number; x: number; y: number; dir: number; held?: Held }
   | { type: 'remove'; x: number; y: number }
   | { type: 'rotate'; x: number; y: number }
-  | { type: 'setRecipe'; x: number; y: number; recipe: number };
+  | { type: 'setRecipe'; x: number; y: number; recipe: number }
+  | { type: 'research'; tech: number };
 
 export type SimEvent =
   | { type: 'goal'; index: number }
+  | { type: 'tech'; id: number }
   | { type: 'won' };
 
 export interface SimOptions {
@@ -149,6 +156,12 @@ export class Sim {
   rate = new Uint32Array(ITEM_COUNT);
   /** Seconds for which every rate of the current gate has been met. */
   gateHeld = 0;
+  /** Techs the town has bought, by tech id. */
+  researched = new Uint8Array(TECHS.length + 1);
+  /** What the town is owed of each item, in sixtieths: it uses a rate per minute, taken once a second. */
+  consumeDebt = new Uint16Array(ITEM_COUNT);
+  /** 1 for each item the town uses and the hub has run out of. */
+  short = new Uint8Array(ITEM_COUNT);
 
   // ---- derived, never saved ----
   private order = new Int32Array(this.capacity);
@@ -207,6 +220,7 @@ export class Sim {
       this.unlockedBuildings.fill(1);
       this.unlockedRecipes.fill(1);
       this.unlockedResources.fill(1);
+      this.researched.fill(1);
     } else {
       for (const key of STARTING_UNLOCKS.buildings) this.unlockedBuildings[buildingId(key)] = 1;
       for (const key of STARTING_UNLOCKS.recipes) this.unlockedRecipes[recipeId(key)] = 1;
@@ -303,6 +317,9 @@ export class Sim {
     h = fnv1a(h, this.goalProgress);
     h = fnv1a(h, this.rateBuckets);
     h = fnv1a(h, this.rate);
+    h = fnv1a(h, this.researched);
+    h = fnv1a(h, this.consumeDebt);
+    h = fnv1a(h, this.short);
     h = fnv1a(h, this.unlockedBuildings);
     h = fnv1a(h, this.unlockedRecipes);
     h = fnv1a(h, this.unlockedResources);
@@ -389,7 +406,36 @@ export class Sim {
         this.changed();
         return true;
       }
+      case 'research':
+        return this.research(command.tech);
     }
+  }
+
+  /** Why a tech cannot be bought right now, or null if it can. Reads only. */
+  techError(id: number): string | null {
+    const tech = TECH_BY_ID[id];
+    if (!tech) return 'There is no such thing to learn.';
+    if (this.researched[id]) return `${tech.name} is already known.`;
+    if (tech.stage > this.goalIndex) return `The town is not big enough to learn ${tech.name} yet.`;
+    for (const key of tech.requires) {
+      const needed = TECH_BY_KEY.get(key)!;
+      if (!this.researched[needed.id]) return `${tech.name} needs ${needed.name} first.`;
+    }
+    for (const c of tech.cost) {
+      if (this.stock[itemId(c.item)] < c.count) return `Not enough ${ITEM_BY_KEY.get(c.item)?.name.toLowerCase()} in the hub: ${tech.name} costs ${c.count}.`;
+    }
+    return null;
+  }
+
+  private research(id: number): boolean {
+    if (this.techError(id) !== null) return false;
+    const tech = TECH_BY_ID[id]!;
+    for (const c of tech.cost) this.stock[itemId(c.item)] -= c.count;
+    this.researched[id] = 1;
+    for (const key of tech.unlocks.buildings ?? []) this.unlockedBuildings[buildingId(key)] = 1;
+    for (const key of tech.unlocks.recipes ?? []) this.unlockedRecipes[recipeId(key)] = 1;
+    this.events.push({ type: 'tech', id });
+    return true;
   }
 
   private place(building: number, x: number, y: number, dir: number, held?: Held): boolean {
@@ -809,8 +855,33 @@ export class Sim {
     for (let item = 1; item < ITEM_COUNT; item++) buckets[item * RATE_WINDOW_SECONDS + this.rateCursor] = 0;
   }
 
+  /** What the town takes from the hub at its current stage. */
+  consumption(): { item: string; perMinute: number }[] {
+    return this.goalIndex < GOALS.length ? GOALS[this.goalIndex].consumes ?? [] : FINAL_CONSUMES;
+  }
+
+  /** Whether the town went without something it uses in the last second. */
+  townIsShort(): boolean {
+    for (let item = 1; item < ITEM_COUNT; item++) if (this.short[item]) return true;
+    return false;
+  }
+
+  /** The town takes a second's worth of what it uses. What the hub does not have is simply missed. */
+  private consume(): void {
+    for (const use of this.consumption()) {
+      const item = itemId(use.item);
+      const owed = this.consumeDebt[item] + use.perMinute;
+      const want = Math.floor(owed / 60);
+      this.consumeDebt[item] = owed - want * 60;
+      this.stock[item] = Math.max(0, this.stock[item] - want);
+      // The town is short of an item for as long as the hub holds none of it.
+      this.short[item] = this.stock[item] === 0 ? 1 : 0;
+    }
+  }
+
   private updateTown(): void {
     this.updateRates();
+    this.consume();
     const goal = GOALS[this.goalIndex];
     if (!goal) return;
     for (const need of goal.needs) {
@@ -818,7 +889,7 @@ export class Sim {
     }
     if (goal.rates) {
       // The count only moves while every rate is met. It never goes back.
-      if (this.gateRatesMet()) this.gateHeld++;
+      if (this.gateRatesMet() && !this.townIsShort()) this.gateHeld++;
       if (this.gateHeld < (goal.holdSeconds ?? 0)) return;
     }
     for (const key of goal.unlocks.buildings ?? []) this.unlockedBuildings[buildingId(key)] = 1;
@@ -828,6 +899,8 @@ export class Sim {
     this.events.push({ type: 'goal', index: this.goalIndex });
     this.goalIndex++;
     this.gateHeld = 0;
+    this.consumeDebt.fill(0);
+    this.short.fill(0);
     this.goalProgress.fill(0);
     this.loadGoalNeed();
     if (this.goalIndex === GOALS.length) this.events.push({ type: 'won' });

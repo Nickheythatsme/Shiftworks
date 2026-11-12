@@ -6,7 +6,8 @@ unlock the next step.
 
 This build covers milestones 1 to 4 of the design: the map and camera, belts and
 miners, machines and recipes, and the town with unlocks and saves. Phase 5, an
-economy that demands scale, has rate gates, copy and paste, and undo. The moving map
+economy that demands scale, has rate gates, a town that learns and uses goods,
+copy and paste, and undo. The moving map
 (phase 6) is not built yet.
 
 ## Run it
@@ -52,15 +53,19 @@ Then open http://localhost:5173.
   hub. Belts and miners take raw timber and stone; kilns, splitters and
   assemblers take parts the factory has to make first. Removing a building
   returns its materials in full. A new game starts with 60 timber and 20 stone.
-- Belts that point into the **town hub** deliver. Deliveries count toward the
-  current list and also become building materials. Each delivery list unlocks
-  the next building, recipe or resource.
-- Two of the lists are **rate gates**: the town moves up a stage only once the
-  hub receives several goods at 100 a minute each, all at the same time, for
-  three or five minutes. The count pauses when a rate drops and never resets.
-  A gate cannot be passed by waiting, only by adding miners and machines. The
-  town panel shows each rate, the time held, and everything arriving at the
-  hub per minute.
+- Belts that point into the **town hub** deliver. Everything delivered becomes
+  stock in the hub, which pays for buildings and for what the town learns.
+- **The town learns.** You start with belts and miners. Every other building
+  and recipe is bought once from the hub's stock, in the town panel, in the
+  order you choose. Some need another first, and more appear at each stage.
+- **The town grows through gates.** It goes from camp to hamlet to village
+  once the hub receives three goods at 100 a minute each, all at the same time,
+  for three or five minutes. The count pauses when a rate drops and never
+  resets. A gate cannot be passed by waiting, only by adding miners and
+  machines. Passing the first gate opens copper, coal and more land.
+- **The town uses goods.** From the hamlet on it takes planks, bricks and iron
+  plate out of the hub every minute. If the hub runs out of one, the gate's
+  count pauses until some arrives, so the early lines have to keep running.
 - **Blue means in, orange means out.** Every building has glowing blue arrows
   on the sides it takes items from and an orange arrow where it pushes them
   out. Larger floating arrows show the same thing on the building you are
@@ -79,7 +84,7 @@ menu also has save, load, export to a file and import from a file.
 
 ## AI plays
 
-An AI player can play the game for you. It works through the delivery lists
+An AI player can play the game for you. It grows the town through its gates
 with the same buildings, costs and rules you have, and it sees the game as
 text: it reads the state, looks at a character map, places buildings, routes
 belts and then waits to see what the factory delivers.
@@ -128,7 +133,7 @@ AI thought, did and was told.
 
 The AI's tools are `get_state`, `view_map`, `find_deposits`, `inspect`,
 `build`, `build_belt`, `connect` (routes a belt between two buildings),
-`set_recipe`, `remove` and `wait`. Game time only passes inside `wait`, so a
+`set_recipe`, `remove`, `research` and `wait`. Game time only passes inside `wait`, so a
 slow model is not punished for thinking.
 
 ## Development

@@ -111,6 +111,8 @@ export class History {
 
   /** Worked out before the command runs, from the state it is about to change. */
   private inverseOf(command: Command): Command[] {
+    // What the town has learned stays learned.
+    if (command.type === 'research') return [];
     const sim = this.sim();
     const slot = sim.world.buildingAt(command.x, command.y);
     switch (command.type) {

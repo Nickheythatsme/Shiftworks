@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GOALS, RATE_WINDOW_SECONDS, itemId, recipeId, buildingId } from '../src/content/content';
+import { GOALS, RATE_WINDOW_SECONDS, TECHS, TECH_BY_KEY, itemId, recipeId } from '../src/content/content';
 import { HUB_X, HUB_Y, SAVE_VERSION, STATUS_BLOCKED, STATUS_STARVED, Sim, loadSim, saveSim } from '../src/sim';
 import { buildBenchFactory } from '../src/tools/benchFactory';
 import {
@@ -297,19 +297,46 @@ describe('rate gates', () => {
 });
 
 describe('the town', () => {
-  it('completes a delivery list and unlocks the next step', () => {
-    const sim = new Sim({ seed: 3, worldType: 'test', freeBuild: true });
+  const tech = (key: string) => TECH_BY_KEY.get(key)!;
+
+  it('learns a tech for a one-off payment from the hub and unlocks what it gives', () => {
+    const sim = new Sim({ seed: 3, worldType: 'test' });
+    const sawmill = tech('sawmill');
     expect(sim.unlockedBuildings[SAWMILL]).toBe(0);
-    place(sim, MINER, TIMBER_X, ROW, SOUTH);
-    belts(sim, TIMBER_X, ROW + 1, SOUTH, 5);
-    belts(sim, TIMBER_X, ROW + 6, EAST, HUB_X - TIMBER_X);
-    belts(sim, HUB_X, ROW + 6, SOUTH, HUB_Y - 2 - (ROW + 6) + 1);
-    run(sim, 30 * 120);
-    expect(sim.goalIndex).toBeGreaterThanOrEqual(1);
+    expect(sim.techError(sawmill.id)).toContain('Not enough timber');
+    sim.enqueue({ type: 'research', tech: sawmill.id });
+    run(sim, 1);
+    expect(sim.researched[sawmill.id]).toBe(0);
+
+    sim.stock[TIMBER] = 100;
+    sim.enqueue({ type: 'research', tech: sawmill.id });
+    run(sim, 1);
+    expect(sim.researched[sawmill.id]).toBe(1);
+    expect(sim.stock[TIMBER]).toBe(100 - sawmill.cost[0].count);
     expect(sim.unlockedBuildings[SAWMILL]).toBe(1);
-    // Deliveries stay in the hub as building material.
-    expect(sim.stock[TIMBER]).toBe(60 + sim.delivered[TIMBER]);
-    expect(sim.events.some((e) => e.type === 'goal' && e.index === 0)).toBe(true);
+    expect(sim.unlockedRecipes[recipeId('planks')]).toBe(1);
+    expect(sim.events).toContainEqual({ type: 'tech', id: sawmill.id });
+    expect(sim.techError(sawmill.id)).toContain('already known');
+  });
+
+  it('holds a tech back until what it needs is known and the town is big enough', () => {
+    const sim = new Sim({ seed: 3, worldType: 'test' });
+    sim.stock.fill(1000);
+    expect(sim.techError(tech('kiln').id)).toContain('needs Sawmill first');
+    expect(sim.techError(tech('assembler').id)).toContain('not big enough');
+    sim.goalIndex = tech('assembler').stage;
+    expect(sim.techError(tech('assembler').id)).toBeNull();
+  });
+
+  it('cannot buy anything out of the starting materials alone', () => {
+    // Otherwise a player could spend the stock they need for their first miners.
+    const sim = new Sim({ seed: 3, worldType: 'test' });
+    sim.goalIndex = GOALS.length;
+    for (const t of TECHS) {
+      sim.researched.fill(1);
+      sim.researched[t.id] = 0;
+      expect(sim.techError(t.id)).toContain('Not enough');
+    }
   });
 
   it('opens a ring of map and new resources when the camp becomes a hamlet', () => {
@@ -321,20 +348,42 @@ describe('the town', () => {
     run(sim, 31);
     expect(sim.world.radius).toBe(radius + 1);
     expect(sim.unlockedResources[itemId('coal')]).toBe(1);
-    expect(sim.unlockedBuildings[buildingId('assembler')]).toBe(1);
     expect(sim.placeError(BELT, sim.world.minTile, sim.world.minTile)).toBeNull();
   });
 
-  it('does not count the starting materials toward a delivery list', () => {
+  it('uses goods from the hub once it is a hamlet, at the rate the stage sets', () => {
     const sim = new Sim({ seed: 3, worldType: 'test' });
-    expect(sim.stock[TIMBER]).toBeGreaterThanOrEqual(GOALS[0].needs[0].count);
-    run(sim, 90);
-    expect(sim.goalIndex).toBe(0);
+    sim.goalIndex = GOALS.findIndex((g) => g.consumes);
+    const uses = GOALS[sim.goalIndex].consumes!;
+    for (const u of uses) sim.stock[itemId(u.item)] = 500;
+    run(sim, 30 * 120);
+    for (const u of uses) expect(sim.stock[itemId(u.item)]).toBe(500 - 2 * u.perMinute);
+    expect(sim.townIsShort()).toBe(false);
   });
 
-  it('announces the win after the last list', () => {
+  it('pauses a gate while the hub has none of something the town uses', () => {
+    const sim = new Sim({ seed: 3, worldType: 'test' });
+    const gate = GOALS.findIndex((g) => g.consumes && g.rates);
+    sim.goalIndex = gate;
+    const uses = GOALS[gate].consumes!;
+    const second = () => {
+      for (const r of GOALS[gate].rates!) fakeRate(sim, itemId(r.item), 2);
+      run(sim, 30);
+    };
+    for (const u of uses) sim.stock[itemId(u.item)] = 0;
+    for (let i = 0; i < 20; i++) second();
+    expect(sim.townIsShort()).toBe(true);
+    expect(sim.gateHeld).toBe(0);
+    for (const u of uses) sim.stock[itemId(u.item)] = 500;
+    for (let i = 0; i < 20; i++) second();
+    expect(sim.townIsShort()).toBe(false);
+    expect(sim.gateHeld).toBe(20);
+  });
+
+  it('announces the win after the last gate', () => {
     const sim = new Sim({ seed: 3, worldType: 'test' });
     for (let g = 0; g < GOALS.length; g++) {
+      for (const u of sim.consumption()) sim.stock[itemId(u.item)] = 500;
       passCurrentList(sim);
       run(sim, 30);
     }
