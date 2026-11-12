@@ -128,6 +128,10 @@ export function AiPanel({ session, onClose }: { session: AiSession; onClose: () 
           <input type="checkbox" checked={state.follow} onChange={(e) => session.configure({ follow: e.target.checked })} />
           Camera follows
         </label>
+        <label className="check">
+          <input type="checkbox" checked={state.animate} onChange={(e) => session.configure({ animate: e.target.checked })} />
+          Show it building
+        </label>
       </div>
       <div className="row">
         {state.status === 'idle' ? (

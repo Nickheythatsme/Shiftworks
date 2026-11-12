@@ -28,6 +28,8 @@ export interface AiState {
   maxCostUsd: number;
   speed: number;
   follow: boolean;
+  /** Whether placements are acted out with the hand, or just appear. */
+  animate: boolean;
   usage: AgentUsage | null;
   log: LogEntry[];
 }
@@ -54,7 +56,7 @@ export class AiSession {
   // and goes nowhere except straight to the Claude API.
   private apiKey = storedKey();
   private state: AiState = {
-    available: null, keyHint: this.apiKey.slice(-4), rememberKey: this.apiKey !== '', status: 'idle', model: DEFAULT_MODEL, effort: 'medium', maxCostUsd: 5, speed: 8, follow: true, usage: null, log: [],
+    available: null, keyHint: this.apiKey.slice(-4), rememberKey: this.apiKey !== '', status: 'idle', model: DEFAULT_MODEL, effort: 'medium', maxCostUsd: 5, speed: 8, follow: true, animate: true, usage: null, log: [],
   };
   private readonly listeners = new Set<() => void>();
   private controller: AbortController | null = null;
@@ -113,16 +115,16 @@ export class AiSession {
     return this.apiKey !== '' || this.state.available === true;
   }
 
-  configure(patch: Partial<Pick<AiState, 'model' | 'effort' | 'maxCostUsd' | 'speed' | 'follow'>>): void {
+  configure(patch: Partial<Pick<AiState, 'model' | 'effort' | 'maxCostUsd' | 'speed' | 'follow' | 'animate'>>): void {
     this.set(patch);
-    this.game.setAiOptions(this.state.speed, this.state.follow);
+    this.game.setAiOptions(this.state.speed, this.state.follow, this.state.animate);
   }
 
   async start(): Promise<void> {
     if (this.state.status !== 'idle' || !this.canStart()) return;
     this.controller = new AbortController();
     this.set({ status: 'running', usage: null, log: [] });
-    this.game.setAiOptions(this.state.speed, this.state.follow);
+    this.game.setAiOptions(this.state.speed, this.state.follow, this.state.animate);
     this.game.setAiActive(true);
     // With a key pasted into the panel the page calls the Claude API directly:
     // the person chose to put their own key in their own browser, which is the

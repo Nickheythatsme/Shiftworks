@@ -91,6 +91,24 @@ export interface Ghost {
   ok: boolean;
 }
 
+/** The AI player's hand: where it is over the map and what it is carrying. */
+export interface AiHand {
+  /** Ground position in world units; fractions put it between tiles. */
+  x: number;
+  z: number;
+  /** How high the carried building is held above the ground. */
+  lift: number;
+  /** Building id being carried, or 0 for an empty hand. */
+  building: number;
+  dir: number;
+  /** The tile it is heading for, outlined on the ground. */
+  tileX: number;
+  tileY: number;
+}
+
+const AI_COLOR = 0xc9a6ff;
+const PULSE_SECONDS = 0.7;
+
 // ---- shaders -------------------------------------------------------------------
 
 const BUILDING_VERTEX_PARS = /* glsl */ `
@@ -350,6 +368,14 @@ export class GameRenderer {
   private readonly ghostMaterial = new THREE.MeshBasicMaterial({ color: 0x7dffa0, transparent: true, opacity: 0.55, depthWrite: false });
   private readonly cursor: THREE.LineLoop;
   private readonly selection: THREE.LineLoop;
+  // The AI player's hand: a tinted copy of the building it carries, a pointer
+  // above it, an outline on the tile it is heading for, and rings where it drops.
+  private readonly aiGhosts = new Map<number, THREE.Mesh>();
+  private readonly aiGhostMaterial = new THREE.MeshBasicMaterial({ color: AI_COLOR, transparent: true, opacity: 0.8, depthWrite: false });
+  private readonly aiPointer: THREE.Mesh;
+  private readonly aiTile: THREE.LineLoop;
+  private readonly pulseGeometry = new THREE.RingGeometry(0.4, 0.5, 40).rotateX(-Math.PI / 2);
+  private readonly pulses: { mesh: THREE.Mesh; age: number }[] = [];
   private readonly portArrows: { mesh: THREE.Mesh; x: number; z: number; dx: number; dz: number; into: boolean }[] = [];
   private readonly portOut = new THREE.MeshBasicMaterial({ color: PORT_OUT, transparent: true, opacity: 0.95, depthTest: false, side: THREE.DoubleSide });
   private readonly portIn = new THREE.MeshBasicMaterial({ color: PORT_IN, transparent: true, opacity: 0.95, depthTest: false, side: THREE.DoubleSide });
@@ -464,6 +490,31 @@ export class GameRenderer {
       this.scene.add(mesh);
     }
 
+    for (const [id, ghost] of this.ghostMeshes) {
+      const carried = new THREE.Mesh(ghost.geometry, this.aiGhostMaterial);
+      carried.visible = false;
+      carried.renderOrder = 4;
+      this.aiGhosts.set(id, carried);
+      this.scene.add(carried);
+    }
+    // A cone hanging point-down over the hand, so it reads as a pointer from any angle.
+    this.aiPointer = new THREE.Mesh(
+      new THREE.ConeGeometry(0.3, 0.75, 4).rotateX(Math.PI),
+      new THREE.MeshBasicMaterial({ color: 0xa06bff, depthTest: false }),
+    );
+    this.aiPointer.renderOrder = 5;
+    this.aiPointer.visible = false;
+    this.aiTile = this.makeOutline(AI_COLOR, 0.5);
+    // The tile it is heading for is filled in as well as outlined, so the destination shows from far out.
+    const fill = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: AI_COLOR, transparent: true, opacity: 0.38, depthTest: false }),
+    );
+    fill.position.y = 0.03;
+    fill.renderOrder = 3;
+    this.aiTile.add(fill);
+    this.scene.add(this.aiPointer, this.aiTile);
+
     this.cursor = this.makeOutline(0xffffff, 0.5);
     this.selection = this.makeOutline(0xffe08a, 0.56);
     this.scene.add(this.cursor, this.selection);
@@ -519,6 +570,50 @@ export class GameRenderer {
     mesh.position.set(ghost.x + 0.5, 0.02, ghost.y + 0.5);
     mesh.quaternion.copy(this.quaternions[ghost.dir & 3]);
     this.ghostMaterial.color.setHex(ghost.ok ? 0x7dffa0 : 0xff5a5a);
+  }
+
+  /** Shows the AI player's hand, or hides it with null. */
+  setAiHand(hand: AiHand | null): void {
+    for (const mesh of this.aiGhosts.values()) mesh.visible = false;
+    this.aiPointer.visible = hand !== null;
+    this.aiTile.visible = hand !== null;
+    if (!hand) return;
+    const bob = Math.sin(performance.now() / 180) * 0.04;
+    this.aiPointer.position.set(hand.x, hand.lift + 1.6 + bob, hand.z);
+    this.aiTile.position.set(hand.tileX + 0.5, 0, hand.tileY + 0.5);
+    const mesh = this.aiGhosts.get(hand.building);
+    if (!mesh) return;
+    mesh.visible = true;
+    mesh.position.set(hand.x, 0.02 + hand.lift, hand.z);
+    mesh.quaternion.copy(this.quaternions[hand.dir & 3]);
+  }
+
+  /** Starts a ring spreading out from a tile, to mark something that just happened there. */
+  pulse(x: number, y: number, color: number): void {
+    let ring = this.pulses.find((p) => p.age >= PULSE_SECONDS);
+    if (!ring) {
+      if (this.pulses.length >= 48) return;
+      const material = new THREE.MeshBasicMaterial({ transparent: true, depthTest: false, side: THREE.DoubleSide });
+      ring = { mesh: new THREE.Mesh(this.pulseGeometry, material), age: 0 };
+      ring.mesh.renderOrder = 4;
+      this.pulses.push(ring);
+      this.scene.add(ring.mesh);
+    }
+    ring.age = 0;
+    ring.mesh.visible = true;
+    ring.mesh.position.set(x + 0.5, 0.06, y + 0.5);
+    (ring.mesh.material as THREE.MeshBasicMaterial).color.setHex(color);
+  }
+
+  private updatePulses(dt: number): void {
+    for (const ring of this.pulses) {
+      if (ring.age >= PULSE_SECONDS) continue;
+      ring.age += dt;
+      const k = Math.min(1, ring.age / PULSE_SECONDS);
+      ring.mesh.visible = k < 1;
+      ring.mesh.scale.setScalar(0.7 + 2.1 * (1 - (1 - k) * (1 - k)));
+      (ring.mesh.material as THREE.MeshBasicMaterial).opacity = 0.95 * (1 - k);
+    }
   }
 
   /**
@@ -674,6 +769,7 @@ export class GameRenderer {
     this.sun.target.position.copy(this.rig.target);
     this.sun.position.set(this.rig.target.x + 70, 105, this.rig.target.z + 50);
 
+    this.updatePulses(dt);
     this.renderer.render(this.scene, this.rig.camera);
   }
 

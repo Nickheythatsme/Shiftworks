@@ -77,6 +77,12 @@ runs fast while it waits for the factory; the panel shows its reasoning, each
 action and what came back, and a running cost estimate. Stop hands the game
 back to you.
 
+You can see where it builds: a purple pointer carries each building across the
+map to its tile and drops it, a belt is dragged out tile by tile, and a ring
+spreads from every tile it changes (red for removals). The camera glides after
+the pointer. "Show it building" and "Camera follows" in the panel turn these
+off.
+
 A pasted key is sent only to the Claude API, straight from the page. It is
 forgotten when the page closes unless you tick "Remember it in this browser",
 which keeps it in the browser's local storage. Playing spends on that key, up
