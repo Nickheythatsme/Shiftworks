@@ -114,6 +114,10 @@ select:disabled, button:disabled { opacity: 0.55; cursor: default; }
 .ai-entry.say { white-space: pre-wrap; }
 .ai-entry.think { color: var(--muted); font-style: italic; white-space: pre-wrap; border-left: 2px solid var(--line); padding-left: 8px; }
 .ai-entry.note { color: var(--muted); font-size: 12px; }
+.ai-entry.note.activity { animation: ai-pulse 1.4s ease-in-out infinite; }
+.ai-entry.say.live::after, .ai-entry.think.live::after, .ai-entry.tool.live code::after { content: '▍'; margin-left: 1px; color: var(--accent); font-style: normal; animation: ai-pulse 1s steps(2, jump-none) infinite; }
+@keyframes ai-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .ai-entry.note.activity, .ai-entry.live::after, .ai-entry.live code::after { animation: none; } }
 .ai-entry.end { border: 1px solid var(--ok); border-radius: 7px; padding: 6px 8px; }
 .ai-entry.end.bad { border-color: var(--bad); }
 .ai-call { display: flex; gap: 8px; align-items: baseline; width: 100%; text-align: left; background: none; border: none; padding: 0; opacity: 1 !important; }

@@ -49,14 +49,25 @@ function aiProxy(): Plugin {
             if (typeof value === 'string') headers[name] = value;
           }
           const body = await readBody(req);
-          const upstream = await fetch(`https://api.anthropic.com${req.url}`, { method: 'POST', headers, body: new Uint8Array(body) });
+          // If the page gives up on the request (Stop was pressed), stop the model too.
+          const gone = new AbortController();
+          res.on('close', () => gone.abort());
+          const upstream = await fetch(`https://api.anthropic.com${req.url}`, { method: 'POST', headers, body: new Uint8Array(body), signal: gone.signal });
           res.statusCode = upstream.status;
-          for (const name of ['content-type', 'request-id', 'retry-after']) {
+          for (const name of ['content-type', 'request-id', 'retry-after', 'cache-control']) {
             const value = upstream.headers.get(name);
             if (value) res.setHeader(name, value);
           }
-          res.end(Buffer.from(await upstream.arrayBuffer()));
+          // Replies are streamed, so each piece is passed on as it arrives rather than once the reply is whole.
+          res.flushHeaders();
+          if (upstream.body) for await (const chunk of upstream.body) res.write(chunk);
+          res.end();
         } catch (error) {
+          if (res.headersSent) {
+            // Too late to report an error properly: cut the reply short so the page sees it fail.
+            res.destroy();
+            return;
+          }
           res.statusCode = 502;
           res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: `Could not reach the Claude API: ${(error as Error).message}` } }));
         }

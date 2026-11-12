@@ -62,6 +62,8 @@ const result = await runAgent({
   maxCostUsd,
   signal: controller.signal,
   onEvent: (event) => {
+    // The pieces of a reply as it streams in are for a live display; here only finished events are kept.
+    if (event.type === 'request' || event.type === 'partial' || event.type === 'discard' || event.type === 'tool_start') return;
     appendFileSync(transcript, JSON.stringify({ gameSeconds: Math.floor(sim.tick / TICKS_PER_SECOND), ...event }) + '\n');
     switch (event.type) {
       case 'thinking': console.log(`\x1b[2m  (thinking) ${oneLine(event.text, 300)}\x1b[0m`); break;
