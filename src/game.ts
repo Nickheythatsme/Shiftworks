@@ -12,7 +12,7 @@ import {
   Sim, loadSim, saveSim,
 } from './sim';
 import { readSave, writeSave } from './storage';
-import type { AgentHost } from './agent/tools';
+import type { AgentHost, StagedStep } from './agent/tools';
 
 const MAX_TICKS_PER_FRAME = 8;
 /** While an AI player waits, time may run faster than a person would want to watch. */
@@ -20,6 +20,31 @@ const MAX_AI_TICKS_PER_FRAME = 64;
 const AUTOSAVE_SECONDS = 30;
 const AUTOSAVE_KEY = 'autosave';
 const BELT = buildingId('belt');
+
+// How the AI player's hand moves when it places things. Times are real seconds.
+const HAND_CARRY_HEIGHT = 0.9;
+const HAND_DRAG_HEIGHT = 0.22;
+const HAND_DROP_SECONDS = 0.12;
+const HAND_LINGER_SECONDS = 0.7;
+/** A long belt is dragged out in about this long, however many tiles it has. */
+const HAND_RUN_SECONDS = 1.6;
+const PLACE_COLOR = 0xc9a6ff;
+const REMOVE_COLOR = 0xff6b6b;
+
+interface HandStage {
+  steps: StagedStep[];
+  apply: (index: number) => void;
+  resolve: () => void;
+  index: number;
+  /** 'carry' brings the hand over the tile, 'drop' lowers the building onto it. */
+  phase: 'carry' | 'drop';
+  t: number;
+  duration: number;
+  fromX: number;
+  fromZ: number;
+  fromLift: number;
+  toLift: number;
+}
 
 export type Tool = { mode: 'none' } | { mode: 'build'; building: number } | { mode: 'delete' };
 
@@ -100,6 +125,11 @@ export class Game {
   private aiSpeed = 8;
   private aiFollow = true;
   private aiWait: { remaining: number; shouldStop: () => boolean; resolve: () => void } | null = null;
+  private aiAnimate = true;
+  private readonly aiHand = { x: HUB_X + 0.5, z: HUB_Y + 0.5, lift: 0 };
+  private aiStage: HandStage | null = null;
+  private aiHandIdle = HAND_LINGER_SECONDS;
+  private aiCameraGoal: { x: number; z: number } | null = null;
   private lastFrame = 0;
 
   tool: Tool = { mode: 'none' };
@@ -197,6 +227,7 @@ export class Game {
     }
     this.drainEvents();
 
+    this.updateAiHand(dt);
     this.updateGhost();
     this.renderer.render(running ? this.accumulator : 0, dt);
 
@@ -249,13 +280,130 @@ export class Game {
           else this.aiWait = { remaining: ticks, shouldStop, resolve };
         }),
       focus: (x, y) => {
-        if (this.aiFollow) this.renderer.rig.target.set(x + 0.5, 0, y + 0.5);
+        if (this.aiFollow) this.aiCameraGoal = { x: x + 0.5, z: y + 0.5 };
       },
+      stage: (steps, apply) => this.stage(steps, apply),
     };
+  }
+
+  /**
+   * Acts out a run of placements or removals: the hand carries each building
+   * to its tile and drops it, and a run of neighbouring tiles is dragged out in
+   * one sweep. Each step takes effect as it lands.
+   */
+  private stage(steps: StagedStep[], apply: (index: number) => void): Promise<void> {
+    if (!this.aiActive || !this.aiAnimate || steps.length === 0) {
+      for (let i = 0; i < steps.length; i++) apply(i);
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      this.aiStage = { steps, apply, resolve, index: 0, phase: 'carry', t: 0, duration: 0, fromX: 0, fromZ: 0, fromLift: 0, toLift: 0 };
+      this.beginCarry(this.aiStage);
+    });
+  }
+
+  /** Whether step `index` continues a drag from the step before it. */
+  private isDrag(stage: HandStage, index: number): boolean {
+    const a = stage.steps[index - 1];
+    const b = stage.steps[index];
+    return a !== undefined && a.building === b.building && Math.abs(a.x - b.x) + Math.abs(a.y - b.y) === 1;
+  }
+
+  private beginCarry(stage: HandStage): void {
+    const step = stage.steps[stage.index];
+    const hand = this.aiHand;
+    const drag = this.isDrag(stage, stage.index);
+    const distance = Math.hypot(step.x + 0.5 - hand.x, step.y + 0.5 - hand.z);
+    stage.phase = 'carry';
+    stage.t = 0;
+    stage.fromX = hand.x;
+    stage.fromZ = hand.z;
+    stage.fromLift = hand.lift;
+    stage.toLift = drag ? HAND_DRAG_HEIGHT : HAND_CARRY_HEIGHT;
+    stage.duration = drag
+      ? Math.min(0.06, Math.max(0.02, HAND_RUN_SECONDS / stage.steps.length))
+      : Math.min(0.7, Math.max(0.28, 0.24 + distance * 0.018));
+  }
+
+  private updateAiHand(dt: number): void {
+    const hand = this.aiHand;
+    let budget = dt;
+    while (this.aiStage && budget >= 0) {
+      const stage = this.aiStage;
+      const step = stage.steps[stage.index];
+      const use = Math.min(budget, stage.duration - stage.t);
+      stage.t += use;
+      budget -= use;
+      const k = stage.duration > 0 ? Math.min(1, stage.t / stage.duration) : 1;
+      const ease = k * k * (3 - 2 * k);
+      hand.x = stage.fromX + (step.x + 0.5 - stage.fromX) * ease;
+      hand.z = stage.fromZ + (step.y + 0.5 - stage.fromZ) * ease;
+      hand.lift = stage.fromLift + (stage.toLift - stage.fromLift) * ease;
+      if (k < 1) break;
+      if (stage.phase === 'carry') {
+        stage.phase = 'drop';
+        stage.t = 0;
+        stage.fromX = hand.x;
+        stage.fromZ = hand.z;
+        stage.fromLift = hand.lift;
+        stage.toLift = 0;
+        stage.duration = this.isDrag(stage, stage.index) ? 0 : HAND_DROP_SECONDS;
+        continue;
+      }
+      // Landed: this is the moment the building appears.
+      stage.apply(stage.index);
+      this.renderer.pulse(step.x, step.y, step.building ? PLACE_COLOR : REMOVE_COLOR);
+      stage.index++;
+      if (stage.index < stage.steps.length) {
+        this.beginCarry(stage);
+      } else {
+        this.aiStage = null;
+        this.aiHandIdle = 0;
+        stage.resolve();
+      }
+    }
+
+    const stage = this.aiStage;
+    if (stage) {
+      const step = stage.steps[stage.index];
+      this.renderer.setAiHand({ x: hand.x, z: hand.z, lift: hand.lift, building: step.building, dir: step.dir, tileX: step.x, tileY: step.y });
+      if (this.aiFollow) this.aiCameraGoal = { x: hand.x, z: hand.z };
+    } else {
+      this.aiHandIdle += dt;
+      // The empty hand rests where it last put something down, then goes away.
+      if (this.aiActive && this.aiHandIdle < HAND_LINGER_SECONDS) {
+        this.renderer.setAiHand({ x: hand.x, z: hand.z, lift: 0, building: 0, dir: 0, tileX: Math.floor(hand.x), tileY: Math.floor(hand.z) });
+      } else {
+        this.renderer.setAiHand(null);
+      }
+    }
+
+    // The camera glides after the hand instead of jumping to it.
+    const goal = this.aiCameraGoal;
+    if (goal) {
+      const target = this.renderer.rig.target;
+      const ease = 1 - Math.exp(-dt * 5);
+      target.x += (goal.x - target.x) * ease;
+      target.z += (goal.z - target.z) * ease;
+      if (!this.aiStage && Math.hypot(goal.x - target.x, goal.z - target.z) < 0.05) this.aiCameraGoal = null;
+    }
+  }
+
+  /** Lands everything still in the hand at once, so a stopped session leaves nothing half done. */
+  private finishStage(): void {
+    const stage = this.aiStage;
+    if (!stage) return;
+    this.aiStage = null;
+    for (let i = stage.index; i < stage.steps.length; i++) stage.apply(i);
+    stage.resolve();
   }
 
   setAiActive(active: boolean): void {
     this.aiActive = active;
+    if (!active) {
+      this.finishStage();
+      this.aiCameraGoal = null;
+    }
     this.accumulator = 0;
     if (!active && this.aiWait) {
       const wait = this.aiWait;
@@ -266,9 +414,11 @@ export class Game {
     this.publish();
   }
 
-  setAiOptions(speed: number, follow: boolean): void {
+  setAiOptions(speed: number, follow: boolean, animate: boolean): void {
     this.aiSpeed = speed;
     this.aiFollow = follow;
+    this.aiAnimate = animate;
+    if (!follow) this.aiCameraGoal = null;
   }
 
   private drainEvents(): void {

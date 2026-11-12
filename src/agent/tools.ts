@@ -22,6 +22,20 @@ export interface AgentHost {
   advance(ticks: number, shouldStop: () => boolean): Promise<void>;
   /** Optional: point the camera at a tile (world coordinates). */
   focus?(x: number, y: number): void;
+  /**
+   * Optional: act the steps out for someone watching, calling `apply(i)` at
+   * the moment step i should take effect. Every step must be applied, in
+   * order, before the promise resolves. Without this, steps apply at once.
+   */
+  stage?(steps: StagedStep[], apply: (index: number) => void): Promise<void>;
+}
+
+/** One change to the map, in world coordinates. `building` is 0 for a removal. */
+export interface StagedStep { building: number; x: number; y: number; dir: number }
+
+async function perform(host: AgentHost, steps: StagedStep[], apply: (index: number) => void): Promise<void> {
+  if (host.stage) await host.stage(steps, apply);
+  else for (let i = 0; i < steps.length; i++) apply(i);
 }
 
 export interface ToolDef {
@@ -480,7 +494,7 @@ function inspect(sim: Sim, input: Record<string, unknown>): string {
   return `${at(x, y)}: ${ground}. ${describeBuilding(sim, slot)}.${extra}`;
 }
 
-function build(host: AgentHost, input: Record<string, unknown>): string {
+async function build(host: AgentHost, input: Record<string, unknown>): Promise<string> {
   const sim = host.sim();
   const def = BUILDING_BY_KEY.get(String(input.building) as BuildingKey);
   if (!def || def.fixed) throw new ToolError(`Unknown building: ${String(input.building)}.`);
@@ -498,9 +512,11 @@ function build(host: AgentHost, input: Record<string, unknown>): string {
     recipe = r.id;
   }
   const turned = sim.world.buildingAt(x, y) >= 0;
-  sim.enqueue({ type: 'place', building: def.id, x, y, dir });
-  if (recipe) sim.enqueue({ type: 'setRecipe', x, y, recipe });
-  sim.applyQueued();
+  await perform(host, [{ building: def.id, x, y, dir }], () => {
+    sim.enqueue({ type: 'place', building: def.id, x, y, dir });
+    if (recipe) sim.enqueue({ type: 'setRecipe', x, y, recipe });
+    sim.applyQueued();
+  });
   host.focus?.(x, y);
   const slot = sim.world.buildingAt(x, y);
   const parts = [turned ? `Turned the belt at ${at(x, y)} to face ${DIRS[dir]}.` : `Built ${def.key} at ${at(x, y)} facing ${DIRS[dir]}.`];
@@ -515,7 +531,7 @@ function build(host: AgentHost, input: Record<string, unknown>): string {
 interface BeltTile { x: number; y: number; dir: number }
 
 /** Places a run of belts, or nothing if any tile is invalid or the hub cannot pay for all of it. */
-function layBelts(host: AgentHost, tiles: BeltTile[]): string {
+async function layBelts(host: AgentHost, tiles: BeltTile[]): Promise<string> {
   const sim = host.sim();
   const belt = BUILDING_BY_ID[BELT]!;
   let fresh = 0;
@@ -535,8 +551,10 @@ function layBelts(host: AgentHost, tiles: BeltTile[]): string {
       }
     }
   }
-  for (const t of tiles) sim.enqueue({ type: 'place', building: BELT, x: t.x, y: t.y, dir: t.dir });
-  sim.applyQueued();
+  await perform(host, tiles.map((t) => ({ building: BELT, x: t.x, y: t.y, dir: t.dir })), (i) => {
+    sim.enqueue({ type: 'place', building: BELT, x: tiles[i].x, y: tiles[i].y, dir: tiles[i].dir });
+    sim.applyQueued();
+  });
   const last = tiles[tiles.length - 1];
   host.focus?.(last.x, last.y);
   const turned = tiles.length - fresh;
@@ -545,7 +563,7 @@ function layBelts(host: AgentHost, tiles: BeltTile[]): string {
   return `Laid ${fresh} belt${fresh === 1 ? '' : 's'}${turned ? ` and turned ${turned} existing` : ''}: ${corners}. The last belt at ${at(last.x, last.y)} faces ${DIRS[last.dir]}. ${frontText(sim, end)} Stock: ${stockText(sim)}.`;
 }
 
-function buildBelt(host: AgentHost, input: Record<string, unknown>): string {
+function buildBelt(host: AgentHost, input: Record<string, unknown>): Promise<string> {
   if (!Array.isArray(input.path) || input.path.length === 0) throw new ToolError('path must list at least one point.');
   const points = input.path.map((p, i) => pt(p, `path[${i}]`));
   const cells: { x: number; y: number }[] = [points[0]];
@@ -586,7 +604,7 @@ function outputTiles(sim: Sim, except: number): Set<number> {
   return hot;
 }
 
-function connect(host: AgentHost, input: Record<string, unknown>): string {
+async function connect(host: AgentHost, input: Record<string, unknown>): Promise<string> {
   const sim = host.sim();
   const from = pt(input.from, 'from');
   const to = pt(input.to, 'to');
@@ -750,7 +768,7 @@ function setRecipe(host: AgentHost, input: Record<string, unknown>): string {
   return `The ${label(sim, slot)} now makes ${r.key}: ${recipeText(r.id)}.`;
 }
 
-function remove(host: AgentHost, input: Record<string, unknown>): string {
+async function remove(host: AgentHost, input: Record<string, unknown>): Promise<string> {
   const sim = host.sim();
   const tiles: { x: number; y: number }[] = [];
   if (Array.isArray(input.tiles)) input.tiles.forEach((p, i) => tiles.push(pt(p, `tiles[${i}]`)));
@@ -765,18 +783,27 @@ function remove(host: AgentHost, input: Record<string, unknown>): string {
   if (!tiles.length) throw new ToolError('Give tiles, or from and to.');
   const removed = new Map<string, number>();
   let hub = false;
+  // One step per building, however many of the listed tiles it covers.
+  const steps: StagedStep[] = [];
+  const slots = new Set<number>();
   for (const t of tiles) {
     const slot = sim.world.buildingAt(t.x, t.y);
-    if (slot < 0) continue;
+    if (slot < 0 || slots.has(slot)) continue;
     if (sim.role(slot) === ROLE_HUB) {
       hub = true;
       continue;
     }
+    slots.add(slot);
+    steps.push({ building: 0, x: sim.bx[slot], y: sim.by[slot], dir: 0 });
+  }
+  await perform(host, steps, (i) => {
+    const slot = sim.world.buildingAt(steps[i].x, steps[i].y);
+    if (slot < 0) return;
     const name = nameOf(sim, slot);
-    sim.enqueue({ type: 'remove', x: t.x, y: t.y });
+    sim.enqueue({ type: 'remove', x: steps[i].x, y: steps[i].y });
     sim.applyQueued();
     removed.set(name, (removed.get(name) ?? 0) + 1);
-  }
+  });
   if (!removed.size) return `Nothing to remove there.${hub ? ' The hub cannot be removed.' : ''}`;
   host.focus?.(tiles[0].x, tiles[0].y);
   return `Removed ${[...removed].map(([name, n]) => `${n} ${name}`).join(', ')}. Stock: ${stockText(sim)}.`;

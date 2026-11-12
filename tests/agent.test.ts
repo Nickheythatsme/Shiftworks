@@ -100,6 +100,30 @@ describe('agent tools', () => {
     expect(problems(sim).join('\n')).not.toMatch(/does not use it/);
   });
 
+  it('hands placements and removals to a host that wants to act them out', async () => {
+    const sim = new Sim({ seed: 3, worldType: 'test' });
+    const staged: string[] = [];
+    const host = {
+      ...headlessHost(sim),
+      // Applies each step only after recording it, the way the game does once the hand lands.
+      stage: async (steps: { building: number; x: number; y: number }[], apply: (i: number) => void) => {
+        for (let i = 0; i < steps.length; i++) {
+          expect(sim.world.buildingAt(steps[i].x, steps[i].y) >= 0).toBe(steps[i].building === 0);
+          staged.push(`${steps[i].building}@${steps[i].x - HUB_X},${steps[i].y - HUB_Y}`);
+          apply(i);
+        }
+      },
+    };
+    expect(await runTool(host, 'build_belt', { path: [[4, 4], [6, 4]] })).toContain('Laid 3 belts');
+    expect(await runTool(host, 'build', { building: 'belt', x: 7, y: 4, dir: 'E' })).toContain('Built belt');
+    expect(await runTool(host, 'remove', { from: [4, 4], to: [7, 4] })).toContain('Removed 4 belt');
+    expect(staged).toEqual([
+      `${BELT}@4,4`, `${BELT}@5,4`, `${BELT}@6,4`, `${BELT}@7,4`,
+      '0@4,4', '0@5,4', '0@6,4', '0@7,4',
+    ]);
+    expect(sim.count - sim.freeCount).toBe(1);
+  });
+
   it('gives every tool a schema the API accepts', () => {
     for (const tool of TOOLS) {
       expect(tool.name).toMatch(/^[a-z_]+$/);
