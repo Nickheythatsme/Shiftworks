@@ -13,6 +13,7 @@ import {
 } from './sim';
 import { readSave, writeSave } from './storage';
 import type { AgentHost, StagedStep } from './agent/tools';
+import { History } from './history';
 
 const MAX_TICKS_PER_FRAME = 8;
 /** While an AI player waits, time may run faster than a person would want to watch. */
@@ -46,7 +47,16 @@ interface HandStage {
   toLift: number;
 }
 
-export type Tool = { mode: 'none' } | { mode: 'build'; building: number } | { mode: 'delete' };
+export type Tool = { mode: 'none' } | { mode: 'build'; building: number } | { mode: 'delete' } | { mode: 'copy' } | { mode: 'paste' };
+
+/** A copied group of buildings, as offsets from the middle of the copied area. */
+interface Clip {
+  building: number;
+  dx: number;
+  dy: number;
+  dir: number;
+  recipe: number;
+}
 
 export interface UiNeed {
   name: string;
@@ -87,6 +97,10 @@ export interface UiState {
     cost: { name: string; color: string; count: number; enough: boolean }[];
   }[];
   tool: Tool;
+  canUndo: boolean;
+  canRedo: boolean;
+  /** How many buildings are on the clipboard. */
+  clipboard: number;
   /** The tool's facing as it appears on screen: 0 right, 1 down, 2 left, 3 up. */
   toolDir: number;
   hover: string;
@@ -143,6 +157,12 @@ export class Game {
   private hover: { x: number; y: number } | null = null;
   private selected: { x: number; y: number } | null = null;
   private readonly keys = new Set<string>();
+  private readonly history = new History(() => this.sim);
+  private clipboard: Clip[] = [];
+  /** Quarter turns applied to the clipboard before it is pasted. */
+  private pasteTurns = 0;
+  /** The rectangle being dragged out with the copy tool. */
+  private copyArea: { from: { x: number; y: number }; to: { x: number; y: number } } | null = null;
   private drag: { button: number; last: { x: number; y: number } | null; panX: number; panY: number } | null = null;
 
   private toasts: { id: number; text: string; until: number }[] = [];
@@ -192,6 +212,7 @@ export class Game {
   private useSim(sim: Sim): void {
     this.sim = sim;
     this.renderer.setSim(sim);
+    this.history.clear();
     this.selected = null;
     this.accumulator = 0;
     this.won = sim.goalIndex >= GOALS.length;
@@ -406,6 +427,8 @@ export class Game {
 
   setAiActive(active: boolean): void {
     this.aiActive = active;
+    // The AI builds without going through the history, so earlier steps no longer line up.
+    this.history.clear();
     if (!active) {
       this.finishStage();
       this.aiCameraGoal = null;
@@ -457,9 +480,28 @@ export class Game {
   // ---- actions the interface can call -----------------------------------------
 
   setTool(tool: Tool): void {
+    if (tool.mode === 'paste' && this.clipboard.length === 0) {
+      this.warn('Nothing copied yet. Press C and drag over some buildings.');
+      return;
+    }
     this.tool = tool;
+    this.copyArea = null;
     if (tool.mode !== 'none') this.selected = null;
     this.publish();
+  }
+
+  undo(): void {
+    const result = this.history.undo();
+    if (!result) this.warn('Nothing to undo.');
+    else if (result.failed) this.warn(`Undone, but ${result.failed} ${result.failed === 1 ? 'change' : 'changes'} could not be put back.`);
+    this.sincePublish = 1;
+  }
+
+  redo(): void {
+    const result = this.history.redo();
+    if (!result) this.warn('Nothing to redo.');
+    else if (result.failed) this.warn(`Redone, but ${result.failed} ${result.failed === 1 ? 'change' : 'changes'} could not be repeated.`);
+    this.sincePublish = 1;
   }
 
   setSpeed(speed: number): void {
@@ -475,17 +517,17 @@ export class Game {
 
   setRecipe(recipe: number): void {
     if (!this.selected) return;
-    this.sim.enqueue({ type: 'setRecipe', x: this.selected.x, y: this.selected.y, recipe });
+    this.history.do({ type: 'setRecipe', x: this.selected.x, y: this.selected.y, recipe });
     this.sincePublish = 1;
   }
 
   rotateSelected(): void {
-    if (this.selected) this.sim.enqueue({ type: 'rotate', x: this.selected.x, y: this.selected.y });
+    if (this.selected) this.history.do({ type: 'rotate', x: this.selected.x, y: this.selected.y });
   }
 
   removeSelected(): void {
     if (!this.selected) return;
-    this.sim.enqueue({ type: 'remove', x: this.selected.x, y: this.selected.y });
+    this.history.do({ type: 'remove', x: this.selected.x, y: this.selected.y });
     this.selected = null;
   }
 
@@ -583,6 +625,8 @@ export class Game {
     const tile = this.renderer.pick(e.clientX, e.clientY);
     this.hover = tile;
     this.drag = { button: e.button, last: tile, panX: e.clientX, panY: e.clientY };
+    // Everything done until the button comes up undoes as one step.
+    this.history.begin();
     if (!tile) return;
     if (e.button === 2) {
       this.removeAt(tile.x, tile.y);
@@ -591,6 +635,10 @@ export class Game {
         this.placeAt(this.tool.building, tile.x, tile.y, this.toolDir, true);
       } else if (this.tool.mode === 'delete') {
         this.removeAt(tile.x, tile.y);
+      } else if (this.tool.mode === 'copy') {
+        this.copyArea = { from: tile, to: tile };
+      } else if (this.tool.mode === 'paste') {
+        this.pasteAt(tile);
       } else {
         const slot = this.sim.world.buildingAt(tile.x, tile.y);
         this.selected = slot >= 0 ? { x: this.sim.bx[slot], y: this.sim.by[slot] } : null;
@@ -613,6 +661,7 @@ export class Game {
       return;
     }
     if (!tile || (drag.last && drag.last.x === tile.x && drag.last.y === tile.y)) return;
+    if (drag.button === 0 && this.copyArea) this.copyArea.to = tile;
     const deleting = drag.button === 2 || (drag.button === 0 && this.tool.mode === 'delete');
     if (deleting) {
       this.removeAt(tile.x, tile.y);
@@ -626,15 +675,43 @@ export class Game {
   private onPointerUp(e: PointerEvent): void {
     if (this.canvas.hasPointerCapture(e.pointerId)) this.canvas.releasePointerCapture(e.pointerId);
     this.drag = null;
+    this.history.commit();
+    if (this.copyArea) {
+      // The button can come up without a last move event, so take the corner from here.
+      const tile = this.renderer.pick(e.clientX, e.clientY);
+      if (tile) this.copyArea.to = tile;
+      this.finishCopy();
+    }
   }
 
   private onKeyDown(e: KeyboardEvent): void {
-    if (e.target instanceof HTMLInputElement || e.metaKey || e.ctrlKey) return;
+    if (e.target instanceof HTMLInputElement) return;
+    if (e.metaKey || e.ctrlKey) {
+      // The usual shortcuts work as well as the single keys.
+      const action = e.code === 'KeyZ' ? (e.shiftKey ? 'redo' : 'undo') : e.code === 'KeyY' ? 'redo' : e.code === 'KeyC' ? 'copy' : e.code === 'KeyV' ? 'paste' : '';
+      if (!action) return;
+      e.preventDefault();
+      if (action === 'undo') this.undo();
+      else if (action === 'redo') this.redo();
+      else this.setTool({ mode: action });
+      return;
+    }
     this.keys.add(e.code);
     switch (e.code) {
       case 'KeyR':
         if (this.tool.mode === 'build') this.toolDir = (this.toolDir + (e.shiftKey ? 3 : 1)) & 3;
-        else if (this.hover) this.sim.enqueue({ type: 'rotate', x: this.hover.x, y: this.hover.y });
+        else if (this.tool.mode === 'paste') this.pasteTurns = (this.pasteTurns + (e.shiftKey ? 3 : 1)) & 3;
+        else if (this.hover) this.history.do({ type: 'rotate', x: this.hover.x, y: this.hover.y });
+        break;
+      case 'KeyZ':
+        if (e.shiftKey) this.redo();
+        else this.undo();
+        break;
+      case 'KeyC':
+        this.setTool(this.tool.mode === 'copy' ? { mode: 'none' } : { mode: 'copy' });
+        break;
+      case 'KeyV':
+        this.setTool(this.tool.mode === 'paste' ? { mode: 'none' } : { mode: 'paste' });
         break;
       case 'KeyQ':
         this.renderer.rig.rotate(-1);
@@ -694,7 +771,65 @@ export class Game {
       if (explain) this.warn(error);
       return;
     }
-    this.sim.enqueue({ type: 'place', building, x, y, dir });
+    this.history.do({ type: 'place', building, x, y, dir });
+  }
+
+  /** The clipboard as it would land with its middle on `tile`, turned by the paste rotation. */
+  private pasteGhosts(tile: { x: number; y: number }): { building: number; x: number; y: number; dir: number; recipe: number; ok: boolean }[] {
+    return this.clipboard.map((c) => {
+      let dx = c.dx;
+      let dy = c.dy;
+      for (let t = 0; t < this.pasteTurns; t++) [dx, dy] = [-dy, dx];
+      const x = tile.x + dx;
+      const y = tile.y + dy;
+      return { building: c.building, x, y, dir: (c.dir + this.pasteTurns) & 3, recipe: c.recipe, ok: this.sim.placeError(c.building, x, y) === null };
+    });
+  }
+
+  /** Places every copied building that fits and can be paid for. One undo step. */
+  private pasteAt(tile: { x: number; y: number }): void {
+    let placed = 0;
+    let skipped = 0;
+    for (const g of this.pasteGhosts(tile)) {
+      if (!this.history.do({ type: 'place', building: g.building, x: g.x, y: g.y, dir: g.dir })) {
+        skipped++;
+        continue;
+      }
+      placed++;
+      if (g.recipe && this.sim.recipe[this.sim.world.buildingAt(g.x, g.y)] !== g.recipe) {
+        this.history.do({ type: 'setRecipe', x: g.x, y: g.y, recipe: g.recipe });
+      }
+    }
+    if (skipped) this.warn(`Pasted ${placed} of ${placed + skipped}. The rest did not fit or could not be paid for.`);
+  }
+
+  /** Copies the buildings inside the dragged rectangle and switches to pasting them. */
+  private finishCopy(): void {
+    const area = this.copyArea!;
+    this.copyArea = null;
+    const x0 = Math.min(area.from.x, area.to.x);
+    const x1 = Math.max(area.from.x, area.to.x);
+    const y0 = Math.min(area.from.y, area.to.y);
+    const y1 = Math.max(area.from.y, area.to.y);
+    const cx = (x0 + x1) >> 1;
+    const cy = (y0 + y1) >> 1;
+    const clips: Clip[] = [];
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const slot = this.sim.world.buildingAt(x, y);
+        // A building is copied from its own tile, so a large one is taken once.
+        if (slot < 0 || this.sim.bx[slot] !== x || this.sim.by[slot] !== y) continue;
+        if (BUILDING_BY_ID[this.sim.kind[slot]]?.fixed) continue;
+        clips.push({ building: this.sim.kind[slot], dx: x - cx, dy: y - cy, dir: this.sim.dir[slot], recipe: this.sim.recipe[slot] });
+      }
+    }
+    if (clips.length === 0) {
+      this.warn('No buildings in that area to copy.');
+      return;
+    }
+    this.clipboard = clips;
+    this.pasteTurns = 0;
+    this.setTool({ mode: 'paste' });
   }
 
   private removeAt(x: number, y: number): void {
@@ -705,7 +840,7 @@ export class Game {
       return;
     }
     if (this.selected && this.selected.x === this.sim.bx[slot] && this.selected.y === this.sim.by[slot]) this.selected = null;
-    this.sim.enqueue({ type: 'remove', x, y });
+    this.history.do({ type: 'remove', x, y });
   }
 
   /** Lays belt along a drag, turning each tile to point at the next one. */
@@ -731,8 +866,14 @@ export class Game {
       this.renderer.setCursor(hover, ok ? 0x7dffa0 : 0xff5a5a);
     } else {
       this.renderer.setGhost(null);
-      this.renderer.setCursor(hover, this.tool.mode === 'delete' ? 0xff5a5a : 0xffffff);
+      this.renderer.setCursor(hover, this.tool.mode === 'delete' ? 0xff5a5a : this.tool.mode === 'copy' ? 0x8fd3ff : 0xffffff);
     }
+    this.renderer.setPasteGhosts(this.tool.mode === 'paste' && hover ? this.pasteGhosts(hover) : []);
+    const area = this.copyArea;
+    this.renderer.setArea(area && {
+      x0: Math.min(area.from.x, area.to.x), y0: Math.min(area.from.y, area.to.y),
+      x1: Math.max(area.from.x, area.to.x), y1: Math.max(area.from.y, area.to.y),
+    });
     if (this.selected && this.sim.world.buildingAt(this.selected.x, this.selected.y) < 0) this.selected = null;
     this.renderer.setSelection(this.selected);
 
@@ -813,6 +954,9 @@ export class Game {
         }),
       })),
       tool: this.tool,
+      canUndo: this.history.canUndo,
+      canRedo: this.history.canRedo,
+      clipboard: this.clipboard.length,
       toolDir: (this.toolDir + this.renderer.rig.turns) & 3,
       hover: this.describeHover(),
       selected: this.describeSelected(),

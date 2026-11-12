@@ -169,6 +169,10 @@ function BuildBar({ game, state }: { game: Game; state: UiState }) {
           ? `${active.hint} Costs ${active.cost.map((c) => `${c.count} ${c.name.toLowerCase()}`).join(' + ')}. Facing ${ARROWS[state.toolDir]}, R turns it.`
           : tool.mode === 'delete'
             ? 'Click or drag to remove buildings. Their materials go back to the hub.'
+            : tool.mode === 'copy'
+              ? 'Drag over the buildings to copy. Then click to paste them as many times as you like.'
+            : tool.mode === 'paste'
+              ? `Click to place ${state.clipboard} copied ${state.clipboard === 1 ? 'building' : 'buildings'}. R turns them. Green fits; red does not fit or cannot be paid for.`
             : state.hover || 'Pick something to build, or click a building to inspect it.'}
       </div>
       <section className="panel build-bar">
@@ -205,13 +209,33 @@ function BuildBar({ game, state }: { game: Game; state: UiState }) {
           </span>
           <span className="cost">materials back</span>
         </button>
+        <button
+          className={tool.mode === 'copy' ? 'active' : ''}
+          onClick={() => game.setTool(tool.mode === 'copy' ? { mode: 'none' } : { mode: 'copy' })}
+          title="Copy the buildings in an area, with their recipes."
+        >
+          <span className="build-name"><span>Copy</span><kbd>C</kbd></span>
+          <span className="cost">drag an area</span>
+        </button>
+        <button
+          className={(tool.mode === 'paste' ? 'active' : '') + (state.clipboard ? '' : ' poor')}
+          onClick={() => game.setTool(tool.mode === 'paste' ? { mode: 'none' } : { mode: 'paste' })}
+          title="Place what you copied."
+        >
+          <span className="build-name"><span>Paste</span><kbd>V</kbd></span>
+          <span className="cost">{state.clipboard ? `${state.clipboard} copied` : 'nothing copied'}</span>
+        </button>
+        <button className={state.canUndo ? '' : 'poor'} onClick={() => game.undo()} title="Undo the last thing you built, removed or changed.">
+          <span className="build-name"><span>Undo</span><kbd>Z</kbd></span>
+          <span className="cost">⇧Z redoes</span>
+        </button>
       </section>
       <div className="legend">
         <span><i className="port in" />blue: items go in</span>
         <span><i className="port out" />orange: items come out</span>
       </div>
       <div className="keys">
-        WASD move · wheel zoom · Q/E turn view · R rotate · F copy building · right-click remove · Esc cancel · Space pause
+        WASD move · wheel zoom · Q/E turn view · R rotate · F pick building · C copy area · V paste · Z undo · right-click remove · Esc cancel · Space pause
       </div>
     </div>
   );
