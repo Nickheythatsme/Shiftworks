@@ -112,3 +112,11 @@ select:disabled, button:disabled { opacity: 0.55; cursor: default; }
 .port { display: inline-block; width: 0; height: 0; border-top: 5px solid transparent; border-bottom: 5px solid transparent; border-left: 9px solid; margin-right: 6px; vertical-align: -1px; }
 .port.in { border-left-color: #38b6ff; }
 .port.out { border-left-color: #ff9a1f; }
+.ai-key { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); }
+.ai-key.set { flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; color: var(--text); }
+.ai-key.set button { flex: none; }
+.ai-key code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.ai-key-row { display: flex; gap: 6px; }
+.ai-key-row input { flex: 1; min-width: 0; font: inherit; color: var(--text); background: rgba(255, 255, 255, 0.07); border: 1px solid var(--line); border-radius: 7px; padding: 6px 8px; }
+.ai-key-row input:focus { outline: none; border-color: var(--accent); }
+.ai-key label.check { display: flex; align-items: center; gap: 6px; }

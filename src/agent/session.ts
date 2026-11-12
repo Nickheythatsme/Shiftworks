@@ -16,8 +16,12 @@ export interface LogEntry {
 }
 
 export interface AiState {
-  /** Whether the dev server has a key: null until checked. */
+  /** Whether the dev server has a key of its own: null until checked. */
   available: boolean | null;
+  /** The last few characters of a key pasted into the panel, or '' if there is none. */
+  keyHint: string;
+  /** Whether the pasted key is kept in this browser between visits. */
+  rememberKey: boolean;
   status: 'idle' | 'running' | 'stopping';
   model: string;
   effort: Effort;
@@ -29,6 +33,15 @@ export interface AiState {
 }
 
 const MAX_LOG = 400;
+const KEY_STORE = 'shiftworks-anthropic-key';
+
+function storedKey(): string {
+  try {
+    return window.localStorage.getItem(KEY_STORE) ?? '';
+  } catch {
+    return '';
+  }
+}
 
 function summarise(input: unknown): string {
   if (!input || typeof input !== 'object') return '';
@@ -37,8 +50,11 @@ function summarise(input: unknown): string {
 
 export class AiSession {
   private readonly game: Game;
+  // A key pasted into the panel. It is held here, not in the published state,
+  // and goes nowhere except straight to the Claude API.
+  private apiKey = storedKey();
   private state: AiState = {
-    available: null, status: 'idle', model: DEFAULT_MODEL, effort: 'medium', maxCostUsd: 5, speed: 8, follow: true, usage: null, log: [],
+    available: null, keyHint: this.apiKey.slice(-4), rememberKey: this.apiKey !== '', status: 'idle', model: DEFAULT_MODEL, effort: 'medium', maxCostUsd: 5, speed: 8, follow: true, usage: null, log: [],
   };
   private readonly listeners = new Set<() => void>();
   private controller: AbortController | null = null;
@@ -76,26 +92,51 @@ export class AiSession {
     }
   }
 
+  /** Uses a pasted key from now on. With `remember` it is also kept in this browser's storage. */
+  setKey(key: string, remember: boolean): void {
+    this.apiKey = key.trim();
+    try {
+      if (remember && this.apiKey) window.localStorage.setItem(KEY_STORE, this.apiKey);
+      else window.localStorage.removeItem(KEY_STORE);
+    } catch {
+      // Storage can be unavailable (private windows); the key still works until the page closes.
+    }
+    this.set({ keyHint: this.apiKey.slice(-4), rememberKey: remember && this.apiKey !== '' });
+  }
+
+  clearKey(): void {
+    this.setKey('', false);
+  }
+
+  /** Whether there is any key to play with: one pasted here, or the dev server's. */
+  canStart(): boolean {
+    return this.apiKey !== '' || this.state.available === true;
+  }
+
   configure(patch: Partial<Pick<AiState, 'model' | 'effort' | 'maxCostUsd' | 'speed' | 'follow'>>): void {
     this.set(patch);
     this.game.setAiOptions(this.state.speed, this.state.follow);
   }
 
   async start(): Promise<void> {
-    if (this.state.status !== 'idle') return;
+    if (this.state.status !== 'idle' || !this.canStart()) return;
     this.controller = new AbortController();
     this.set({ status: 'running', usage: null, log: [] });
     this.game.setAiOptions(this.state.speed, this.state.follow);
     this.game.setAiActive(true);
-    // Requests go to this page's own dev server, which adds the real key and
-    // forwards them. The key here is a placeholder, so nothing secret is in
-    // the browser and the SDK's browser check has nothing to protect.
-    const client = new Anthropic({
-      apiKey: 'added-by-the-dev-server',
-      baseURL: `${window.location.origin}/api/anthropic`,
-      dangerouslyAllowBrowser: true,
-      maxRetries: 4,
-    });
+    // With a key pasted into the panel the page calls the Claude API directly:
+    // the person chose to put their own key in their own browser, which is the
+    // case the SDK's browser switch exists for. Otherwise requests go to this
+    // page's dev server, which adds its key and forwards them, and the key
+    // given here is only a placeholder.
+    const client = this.apiKey
+      ? new Anthropic({ apiKey: this.apiKey, dangerouslyAllowBrowser: true, maxRetries: 4 })
+      : new Anthropic({
+          apiKey: 'added-by-the-dev-server',
+          baseURL: `${window.location.origin}/api/anthropic`,
+          dangerouslyAllowBrowser: true,
+          maxRetries: 4,
+        });
     try {
       const result = await runAgent({
         client,
