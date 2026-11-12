@@ -62,7 +62,10 @@ button.active kbd { color: #1b1f24; border-color: rgba(0, 0, 0, 0.3); }
 .techs button { text-align: left; display: flex; flex-direction: column; gap: 2px; }
 .techs button.poor { opacity: 0.7; }
 .techs button.ready small { color: var(--ok); font-weight: 650; }
-.town { max-height: calc(100vh - 24px); overflow-y: auto; }
+/* The town panel gives up height and scrolls, so the panel for the selected building always fits under it. */
+.top-left { max-height: calc(100vh - 28px); }
+.town { min-height: 120px; overflow-y: auto; flex: 0 1 auto; }
+.selected { flex: none; }
 .techs small { font-size: 12px; }
 .tech-name { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .techs .cost { flex-wrap: wrap; }

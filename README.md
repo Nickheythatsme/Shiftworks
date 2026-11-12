@@ -6,8 +6,8 @@ unlock the next step.
 
 This build covers milestones 1 to 4 of the design: the map and camera, belts and
 miners, machines and recipes, and the town with unlocks and saves. Phase 5, an
-economy that demands scale, has rate gates, a town that learns and uses goods,
-copy and paste, and undo. The moving map
+economy that demands scale, is built: rate gates, a town that learns and uses
+goods, crates, bridges and filters, copy and paste, and undo. The moving map
 (phase 6) is not built yet.
 
 ## Run it
@@ -26,7 +26,7 @@ Then open http://localhost:5173.
 | Move the view | W A S D, arrow keys, or drag with the middle mouse button |
 | Zoom | Mouse wheel |
 | Turn the view a quarter turn | Q and E |
-| Pick a building | Click the build bar, or keys 1 to 6 |
+| Pick a building | Click the build bar, or keys 1 to 9 |
 | Place | Left click. Drag to lay belts; they turn to follow the drag |
 | Turn the building you are placing | R (Shift+R the other way) |
 | Turn a placed building | Hover it and press R with no tool selected |
@@ -53,6 +53,14 @@ Then open http://localhost:5173.
   hub. Belts and miners take raw timber and stone; kilns, splitters and
   assemblers take parts the factory has to make first. Removing a building
   returns its materials in full. A new game starts with 60 timber and 20 stone.
+- A **crate** stores up to 200 of one item and passes them on out of its
+  front, so a line can ride out a stop further along.
+- A **bridge** is two ends facing the same way with up to 4 tiles between
+  them. Items go in the back of the first and come out of the front of the
+  second, over whatever is between, so two lines can cross. Items are not drawn
+  while they cross.
+- A **filter** takes items from behind and sends the one item you choose out to
+  its right; everything else goes straight on. Click it to choose the item.
 - Belts that point into the **town hub** deliver. Everything delivered becomes
   stock in the hub, which pays for buildings and for what the town learns.
 - **The town learns.** You start with belts and miners. Every other building
@@ -133,7 +141,7 @@ AI thought, did and was told.
 
 The AI's tools are `get_state`, `view_map`, `find_deposits`, `inspect`,
 `build`, `build_belt`, `connect` (routes a belt between two buildings),
-`set_recipe`, `remove`, `research` and `wait`. Game time only passes inside `wait`, so a
+`set_recipe`, `set_filter`, `remove`, `research` and `wait`. Game time only passes inside `wait`, so a
 slow model is not punished for thinking.
 
 ## Development

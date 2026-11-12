@@ -11,7 +11,7 @@ import {
   RECIPE_BY_ID, RECIPE_BY_KEY, TICKS_PER_SECOND, BELT_SLOTS, buildingId, type BuildingDef, type BuildingKey,
 } from '../content/content';
 import {
-  DX, DY, HUB_X, HUB_Y, ROLE_BELT, ROLE_HUB, ROLE_MACHINE, ROLE_MINER, ROLE_SPLITTER, STATUS_BLOCKED, STATUS_STARVED,
+  DX, DY, HUB_X, HUB_Y, ROLE_BELT, ROLE_BRIDGE, ROLE_CRATE, ROLE_FILTER, ROLE_HUB, ROLE_MACHINE, ROLE_MINER, ROLE_SPLITTER, STATUS_BLOCKED, STATUS_STARVED,
   STATUS_WORKING, Sim, TERRAIN_LAND,
 } from '../sim';
 
@@ -137,6 +137,16 @@ export const TOOLS: ToolDef[] = [
       type: 'object',
       properties: { x: { type: 'integer' }, y: { type: 'integer' }, recipe: { type: 'string', enum: RECIPES.map((r) => r.key) } },
       required: ['x', 'y', 'recipe'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'set_filter',
+    description: 'Chooses the item a filter sends out to its right. Everything else goes straight on.',
+    input_schema: {
+      type: 'object',
+      properties: { x: { type: 'integer' }, y: { type: 'integer' }, item: { type: 'string', enum: ITEMS.map((i) => i.key) } },
+      required: ['x', 'y', 'item'],
       additionalProperties: false,
     },
   },
@@ -276,10 +286,17 @@ function refusal(sim: Sim, tx: number, ty: number, item: number, fx: number, fy:
   switch (sim.role(t)) {
     case ROLE_BELT:
       return sim.bx[t] + DX[d] === fx && sim.by[t] + DY[d] === fy ? `faces the belt at ${at(tx, ty)} head-on, so nothing passes` : null;
+    case ROLE_BRIDGE:
+    case ROLE_FILTER:
     case ROLE_SPLITTER:
+      if (sim.role(t) === ROLE_BRIDGE && sim.isBridgeFarEnd(t)) return `points at the far end of a bridge at ${at(tx, ty)}, which only takes items from its near end`;
       return sim.bx[t] - DX[d] === fx && sim.by[t] - DY[d] === fy
         ? null
-        : `points into the side of the splitter at ${at(tx, ty)}, which only takes items from behind (${at(sim.bx[t] - DX[d], sim.by[t] - DY[d])})`;
+        : `points into the side of the ${label(sim, t)}, which only takes items from behind (${at(sim.bx[t] - DX[d], sim.by[t] - DY[d])})`;
+    case ROLE_CRATE:
+      return item && sim.out[t] > 0 && sim.aux[t] !== item
+        ? `carries ${itemKey(item)} into the ${label(sim, t)}, which is holding ${itemKey(sim.aux[t])} and stores one kind of item at a time`
+        : null;
     case ROLE_MACHINE: {
       const r = RECIPE_BY_ID[sim.recipe[t]];
       if (!r) return `points at the ${label(sim, t)}, which has no recipe`;
@@ -295,6 +312,19 @@ function refusal(sim: Sim, tx: number, ty: number, item: number, fx: number, fy:
   }
 }
 
+/** The directions a building pushes items out in. */
+function outsOf(sim: Sim, s: number): number[] {
+  const d = sim.dir[s];
+  switch (sim.role(s)) {
+    case ROLE_SPLITTER: return [d, (d + 1) & 3, (d + 3) & 3];
+    case ROLE_FILTER: return [d, (d + 1) & 3];
+    case ROLE_BELT: case ROLE_MINER: case ROLE_MACHINE: case ROLE_CRATE: return [d];
+    // The near end of a bridge hands its items to the far end, not to a neighbour.
+    case ROLE_BRIDGE: return sim.isBridgeFarEnd(s) ? [d] : [];
+    default: return [];
+  }
+}
+
 /** Whether any neighbour pushes items into the building in `slot`. */
 function hasFeeder(sim: Sim, slot: number): boolean {
   const x = sim.bx[slot];
@@ -302,9 +332,7 @@ function hasFeeder(sim: Sim, slot: number): boolean {
   for (let side = 0; side < 4; side++) {
     const n = sim.world.buildingAt(x + DX[side], y + DY[side]);
     if (n < 0) continue;
-    const role = sim.role(n);
-    const d = sim.dir[n];
-    const outs = role === ROLE_SPLITTER ? [d, (d + 1) & 3, (d + 3) & 3] : role === ROLE_BELT || role === ROLE_MINER || role === ROLE_MACHINE ? [d] : [];
+    const outs = outsOf(sim, n);
     for (const o of outs) if (sim.bx[n] + DX[o] === x && sim.by[n] + DY[o] === y) return true;
   }
   return false;
@@ -369,6 +397,17 @@ function describeBuilding(sim: Sim, slot: number): string {
     const held = [`${r.inputs[0].item} ${sim.inA[slot]}`];
     if (r.inputs[1]) held.push(`${r.inputs[1].item} ${sim.inB[slot]}`);
     return `${head}, recipe ${r.key}, ${statusText(sim, slot)}, holds ${held.join(' + ')}, ${sim.out[slot]} ${r.output.item} ready`;
+  }
+  if (role === ROLE_CRATE) return `${head}, holding ${sim.out[slot] ? `${sim.out[slot]} ${itemKey(sim.aux[slot])}` : 'nothing'}`;
+  if (role === ROLE_BRIDGE) {
+    const far = sim.bridgeFarEnd(slot);
+    if (sim.isBridgeFarEnd(slot)) return `${head}, the far end of a bridge: items arrive here and leave from its front`;
+    return far >= 0
+      ? `${head}, the near end of a bridge to ${at(sim.bx[far], sim.by[far])}: takes items from behind`
+      : `${head}, a bridge end with NO PARTNER: it needs another bridge facing ${DIRS[d]} within 5 tiles in front of it`;
+  }
+  if (role === ROLE_FILTER) {
+    return `${head}, sends ${sim.recipe[slot] ? itemKey(sim.recipe[slot]) : 'nothing (no item chosen)'} out to its right (${DIRS[(d + 1) & 3]}) and everything else straight on`;
   }
   if (role === ROLE_BELT || role === ROLE_SPLITTER) {
     const items: string[] = [];
@@ -619,9 +658,7 @@ function outputTiles(sim: Sim, except: number): Set<number> {
   const hot = new Set<number>();
   for (let s = 0; s < sim.count; s++) {
     if (!sim.kind[s] || s === except) continue;
-    const role = sim.role(s);
-    const d = sim.dir[s];
-    const outs = role === ROLE_SPLITTER ? [d, (d + 1) & 3, (d + 3) & 3] : role === ROLE_BELT || role === ROLE_MINER || role === ROLE_MACHINE ? [d] : [];
+    const outs = outsOf(sim, s);
     for (const o of outs) hot.add((sim.by[s] + DY[o]) * 65536 + sim.bx[s] + DX[o]);
   }
   return hot;
@@ -775,6 +812,20 @@ async function connect(host: AgentHost, input: Record<string, unknown>): Promise
   return layBelts(host, tiles);
 }
 
+function setFilter(host: AgentHost, input: Record<string, unknown>): string {
+  const sim = host.sim();
+  const x = int(input.x, 'x') + HUB_X;
+  const y = int(input.y, 'y') + HUB_Y;
+  const slot = sim.world.buildingAt(x, y);
+  if (slot < 0 || sim.role(slot) !== ROLE_FILTER) throw new ToolError(`There is no filter at ${at(x, y)}.`);
+  const item = ITEM_BY_KEY.get(String(input.item));
+  if (!item) throw new ToolError(`Unknown item: ${String(input.item)}.`);
+  sim.enqueue({ type: 'setFilter', x, y, item: item.id });
+  sim.applyQueued();
+  host.focus?.(x, y);
+  return `The ${describeBuilding(sim, slot)}.`;
+}
+
 function setRecipe(host: AgentHost, input: Record<string, unknown>): string {
   const sim = host.sim();
   const x = int(input.x, 'x') + HUB_X;
@@ -906,6 +957,7 @@ export async function runTool(host: AgentHost, name: string, input: unknown, can
     case 'build_belt': return buildBelt(host, args);
     case 'connect': return connect(host, args);
     case 'set_recipe': return setRecipe(host, args);
+    case 'set_filter': return setFilter(host, args);
     case 'remove': return remove(host, args);
     case 'research': return research(host, args);
     case 'wait': return wait(host, args, cancelled);
