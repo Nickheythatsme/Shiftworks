@@ -1,7 +1,7 @@
 // The "AI plays" panel: start and stop an AI player and watch what it is
 // thinking and doing. The factory it builds appears on the map as it goes.
 
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { memo, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { MODELS, type Effort } from '../agent/agent';
 import type { AiSession, AiState, LogEntry } from '../agent/session';
 
@@ -17,24 +17,26 @@ function tokens(n: number): string {
   return n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n);
 }
 
-function Entry({ entry }: { entry: LogEntry }) {
+// Memoised because the entry being written changes many times a second and the rest do not.
+const Entry = memo(function Entry({ entry }: { entry: LogEntry }) {
   const [open, setOpen] = useState(false);
-  if (entry.kind === 'text') return <div className="ai-entry say">{entry.body}</div>;
+  const live = entry.pending ? ' live' : '';
+  if (entry.kind === 'text') return <div className={`ai-entry say${live}`}>{entry.body}</div>;
   if (entry.kind === 'notice') return <div className="ai-entry note">{entry.body}</div>;
   if (entry.kind === 'end') return <div className={`ai-entry end${entry.error ? ' bad' : ''}`}><strong>{entry.title}.</strong> {entry.body}</div>;
-  if (entry.kind === 'thinking') return <div className="ai-entry think">{entry.body}</div>;
+  if (entry.kind === 'thinking') return <div className={`ai-entry think${live}`}>{entry.body}</div>;
   const firstLine = entry.body.split('\n')[0];
   const long = entry.body.length > firstLine.length || firstLine.length > 110;
   return (
-    <div className={`ai-entry tool${entry.error ? ' bad' : ''}`}>
+    <div className={`ai-entry tool${entry.error ? ' bad' : ''}${live}`}>
       <button className="ai-call" onClick={() => setOpen(!open)} disabled={!long} title={long ? 'Show the full result' : undefined}>
         <span className="ai-time">{clock(entry.seconds)}</span>
         <code>{entry.title}</code>
       </button>
-      <pre className={open ? 'open' : ''}>{open ? entry.body : firstLine}</pre>
+      {entry.body !== '' && <pre className={open ? 'open' : ''}>{open ? entry.body : firstLine}</pre>}
     </div>
   );
-}
+});
 
 /** Where the API key comes from: one pasted here, or the dev server's own. */
 function KeyRow({ session, state, running }: { session: AiSession; state: AiState; running: boolean }) {
@@ -94,7 +96,7 @@ export function AiPanel({ session, onClose }: { session: AiSession; onClose: () 
   useEffect(() => {
     const el = log.current;
     if (el && pinned.current) el.scrollTop = el.scrollHeight;
-  }, [state.log]);
+  }, [state.log, state.activity]);
 
   return (
     <section className="panel ai">
@@ -164,7 +166,7 @@ export function AiPanel({ session, onClose }: { session: AiSession; onClose: () 
           }}
         >
           {state.log.map((entry) => <Entry key={entry.id} entry={entry} />)}
-          {state.status === 'running' && <div className="ai-entry note">Working…</div>}
+          {running && <div className="ai-entry note activity" role="status">{state.status === 'stopping' ? 'Stopping…' : state.activity}</div>}
         </div>
       )}
     </section>

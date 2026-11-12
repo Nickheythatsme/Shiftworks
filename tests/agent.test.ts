@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type Anthropic from '@anthropic-ai/sdk';
-import { runAgent } from '../src/agent/agent';
+import Anthropic from '@anthropic-ai/sdk';
+import { runAgent, type AgentEvent } from '../src/agent/agent';
 import { TOOLS, ToolError, headlessHost, problems, runTool } from '../src/agent/tools';
 import { GOALS, itemId } from '../src/content/content';
 import { HUB_X, HUB_Y, Sim } from '../src/sim';
@@ -143,19 +143,41 @@ describe('agent loop', () => {
   function scripted(turns: { name: string; input: unknown }[][]): { client: Anthropic; requests: Anthropic.Beta.MessageCreateParams[] } {
     const requests: Anthropic.Beta.MessageCreateParams[] = [];
     let n = 0;
-    const create = async (params: Anthropic.Beta.MessageCreateParams) => {
+    // A reply arrives the way the API streams it: each block is opened, filled in pieces, and the whole message follows.
+    const stream = (params: Anthropic.Beta.MessageCreateParams) => {
       requests.push(structuredClone(params));
       const calls = turns[n++] ?? [];
-      return {
+      const message = {
         content: calls.length
           ? calls.map((c, i) => ({ type: 'tool_use', id: `call_${n}_${i}`, name: c.name, input: c.input }))
           : [{ type: 'text', text: 'Nothing more to do.' }],
         stop_reason: calls.length ? 'tool_use' : 'end_turn',
         usage: { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
       };
+      return {
+        async *[Symbol.asyncIterator]() {
+          for (const [index, block] of message.content.entries()) {
+            yield { type: 'content_block_start', index, content_block: block };
+            if ('input' in block) {
+              const json = JSON.stringify(block.input);
+              yield { type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: json.slice(0, 3) } };
+              yield { type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: json.slice(3) } };
+            } else {
+              yield { type: 'content_block_delta', index, delta: { type: 'text_delta', text: block.text } };
+            }
+          }
+          if (failNext > 0) {
+            failNext--;
+            throw new Anthropic.APIConnectionError({ message: 'socket closed' });
+          }
+        },
+        finalMessage: async () => message,
+      };
     };
-    return { client: { beta: { messages: { create } } } as unknown as Anthropic, requests };
+    return { client: { beta: { messages: { stream } } } as unknown as Anthropic, requests };
   }
+  /** How many of the coming replies break off after their pieces have arrived. */
+  let failNext = 0;
 
   it('runs tool calls against the game and feeds the results back', async () => {
     const sim = new Sim({ seed: 3 });
@@ -181,6 +203,46 @@ describe('agent loop', () => {
     expect(failed.content).toContain('Cannot build miner');
     // The model went quiet on the last turn and was told to keep playing.
     expect(requests.length).toBe(5);
+  });
+
+  it('reports a reply as it arrives, before the turn is finished', async () => {
+    const sim = new Sim({ seed: 3 });
+    const { client } = scripted([[{ name: 'get_state', input: {} }, { name: 'wait', input: { seconds: 5 } }]]);
+    const events: AgentEvent[] = [];
+    await runAgent({ client, host: headlessHost(sim), maxTurns: 2, onEvent: (e) => events.push(e) });
+    const turn = events.slice(0, events.findIndex((e, i) => i > 0 && e.type === 'request'));
+    expect(turn.map((e) => (e.type === 'partial' ? `partial:${e.kind}:${e.index}` : e.type === 'tool_start' || e.type === 'tool' ? `${e.type}:${e.index}` : e.type))).toEqual([
+      'request',
+      'partial:tool:0', 'partial:tool:0', 'partial:tool:0',
+      'partial:tool:1', 'partial:tool:1', 'partial:tool:1',
+      'usage',
+      'tool_start:0', 'tool:0', 'tool_start:1', 'tool:1',
+    ]);
+    // The call is named as soon as it starts, and its input arrives in pieces that add up to the whole.
+    const second = turn.filter((e) => e.type === 'partial' && e.index === 1) as Extract<AgentEvent, { type: 'partial' }>[];
+    expect(second[0].name).toBe('wait');
+    expect(JSON.parse(second.map((e) => e.delta).join(''))).toEqual({ seconds: 5 });
+    // The last turn was text, streamed and then given whole.
+    const last = events.slice(events.length - 4).map((e) => e.type);
+    expect(last).toEqual(['request', 'partial', 'usage', 'text']);
+  });
+
+  it('asks again when a reply breaks off part-way, and voids what it had shown', async () => {
+    const sim = new Sim({ seed: 3 });
+    const { client, requests } = scripted([[{ name: 'get_state', input: {} }], [{ name: 'get_state', input: {} }]]);
+    failNext = 1;
+    const events: string[] = [];
+    const result = await runAgent({ client, host: headlessHost(sim), maxTurns: 1, onEvent: (e) => events.push(e.type) });
+    expect(events.slice(0, 7)).toEqual(['request', 'partial', 'partial', 'partial', 'discard', 'notice', 'request']);
+    // The broken reply was never run or added to the conversation.
+    expect(events.filter((e) => e === 'tool')).toHaveLength(1);
+    expect(requests[1].messages).toHaveLength(1);
+    expect(result.usage.turns).toBe(1);
+    // Three in a row is given up on.
+    failNext = 3;
+    const failed = await runAgent({ client, host: headlessHost(sim), maxTurns: 5 });
+    expect(failed.reason).toBe('error');
+    failNext = 0;
   });
 
   it('stops when the game is already won or the budget is spent', async () => {

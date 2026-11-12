@@ -31,9 +31,20 @@ export interface AgentUsage {
 }
 
 export type AgentEvent =
-  | { type: 'thinking'; text: string }
-  | { type: 'text'; text: string }
-  | { type: 'tool'; name: string; input: unknown; result: string; error: boolean }
+  // A reply as it arrives. `index` is the block's place in the reply, and ties
+  // the pieces of one block to each other and to the finished event below.
+  /** A request has gone to the model and nothing has come back yet. */
+  | { type: 'request' }
+  /** The next piece of a block that is still being written. For a tool call the pieces are its input, as raw JSON. */
+  | { type: 'partial'; kind: 'thinking' | 'text' | 'tool'; index: number; delta: string; name?: string }
+  /** Whatever was shown of the current reply and never finished is void. */
+  | { type: 'discard' }
+  /** A tool call is complete and is about to run. */
+  | { type: 'tool_start'; index: number; name: string; input: unknown }
+  // Finished pieces of a reply.
+  | { type: 'thinking'; text: string; index: number }
+  | { type: 'text'; text: string; index: number }
+  | { type: 'tool'; name: string; input: unknown; result: string; error: boolean; index: number }
   | { type: 'usage'; usage: AgentUsage }
   | { type: 'notice'; text: string };
 
@@ -85,6 +96,7 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
   const messages: Anthropic.Beta.BetaMessageParam[] = [{ role: 'user', content: KICKOFF }];
   let idleReplies = 0;
   let truncated = 0;
+  let dropped = 0;
 
   while (true) {
     if (signal?.aborted) return done('stopped', 'Stopped.');
@@ -92,8 +104,10 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
     if (usage.costUsd >= maxCost) return done('budget', `Reached the spending limit of $${maxCost.toFixed(2)}.`);
 
     let response: Anthropic.Beta.BetaMessage;
+    let received = false;
+    emit({ type: 'request' });
     try {
-      response = await client.beta.messages.create(
+      const stream = client.beta.messages.stream(
         {
           model,
           max_tokens: 16000,
@@ -112,8 +126,32 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
         },
         { signal },
       );
+      // The reply is reported piece by piece as it is written; the loop below
+      // still works from the whole message once it has all arrived.
+      for await (const event of stream) {
+        received = true;
+        if (event.type === 'content_block_start') {
+          if (event.content_block.type === 'tool_use') {
+            emit({ type: 'partial', kind: 'tool', index: event.index, delta: '', name: event.content_block.name });
+          }
+        } else if (event.type === 'content_block_delta') {
+          const delta = event.delta;
+          if (delta.type === 'thinking_delta') emit({ type: 'partial', kind: 'thinking', index: event.index, delta: delta.thinking });
+          else if (delta.type === 'text_delta') emit({ type: 'partial', kind: 'text', index: event.index, delta: delta.text });
+          else if (delta.type === 'input_json_delta') emit({ type: 'partial', kind: 'tool', index: event.index, delta: delta.partial_json });
+        }
+      }
+      response = await stream.finalMessage();
+      dropped = 0;
     } catch (error) {
+      emit({ type: 'discard' });
       if (signal?.aborted || error instanceof Anthropic.APIUserAbortError) return done('stopped', 'Stopped.');
+      // The client retries a request that fails outright, but not one that
+      // breaks off part-way through the reply, so that case is retried here.
+      if (received && error instanceof Anthropic.APIError && (error.status === undefined || error.status >= 500) && ++dropped <= 2) {
+        emit({ type: 'notice', text: 'The reply broke off part-way; asking again.' });
+        continue;
+      }
       if (error instanceof Anthropic.AuthenticationError) return done('error', 'The API key was rejected.');
       if (error instanceof Anthropic.RateLimitError) return done('error', 'Rate limited by the API, even after retries.');
       if (error instanceof Anthropic.APIConnectionError) return done('error', `Could not reach the API: ${error.message}`);
@@ -132,9 +170,9 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
         (u.cache_creation_input_tokens ?? 0) * price.input * 1.25) / 1e6;
     emit({ type: 'usage', usage: { ...usage } });
 
-    for (const block of response.content) {
-      if (block.type === 'thinking' && block.thinking.trim()) emit({ type: 'thinking', text: block.thinking.trim() });
-      else if (block.type === 'text' && block.text.trim()) emit({ type: 'text', text: block.text.trim() });
+    for (const [index, block] of response.content.entries()) {
+      if (block.type === 'thinking' && block.thinking.trim()) emit({ type: 'thinking', text: block.thinking.trim(), index });
+      else if (block.type === 'text' && block.text.trim()) emit({ type: 'text', text: block.text.trim(), index });
       else if (block.type === 'compaction') emit({ type: 'notice', text: 'Earlier turns were summarised to keep the context small.' });
     }
 
@@ -143,6 +181,7 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
     }
     if (response.stop_reason === 'max_tokens') {
       // The reply was cut off, so any tool call in it may be incomplete. Ask again rather than run it.
+      emit({ type: 'discard' });
       if (++truncated > 2) return done('error', 'The model\'s replies kept running out of room.');
       emit({ type: 'notice', text: 'A reply was cut off; asking again.' });
       continue;
@@ -152,7 +191,7 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
     messages.push({ role: 'assistant', content: response.content });
     if (response.stop_reason === 'pause_turn') continue;
 
-    const calls = response.content.filter((b): b is Anthropic.Beta.BetaToolUseBlock => b.type === 'tool_use');
+    const calls = response.content.flatMap((block, index) => (block.type === 'tool_use' ? [{ ...block, index }] : []));
     if (calls.length === 0) {
       if (won(host)) return done('won', 'The town passed its last gate.');
       if (++idleReplies > 3) return done('gave_up', 'The model stopped calling tools before the game was finished.');
@@ -170,6 +209,7 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
         result = 'Not run: the session was stopped.';
         failed = true;
       } else {
+        emit({ type: 'tool_start', index: call.index, name: call.name, input: call.input });
         try {
           result = await runTool(host, call.name, call.input, () => signal?.aborted === true);
         } catch (error) {
@@ -178,7 +218,7 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
           failed = true;
         }
       }
-      emit({ type: 'tool', name: call.name, input: call.input, result, error: failed });
+      emit({ type: 'tool', name: call.name, input: call.input, result, error: failed, index: call.index });
       results.push({ type: 'tool_result', tool_use_id: call.id, content: result, is_error: failed });
     }
     messages.push({ role: 'user', content: results });
