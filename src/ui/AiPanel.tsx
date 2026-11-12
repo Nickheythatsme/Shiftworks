@@ -3,7 +3,7 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { MODELS, type Effort } from '../agent/agent';
-import type { AiSession, LogEntry } from '../agent/session';
+import type { AiSession, AiState, LogEntry } from '../agent/session';
 
 const SPEEDS = [2, 4, 8, 16, 32];
 const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh'];
@@ -36,11 +36,59 @@ function Entry({ entry }: { entry: LogEntry }) {
   );
 }
 
+/** Where the API key comes from: one pasted here, or the dev server's own. */
+function KeyRow({ session, state, running }: { session: AiSession; state: AiState; running: boolean }) {
+  const [draft, setDraft] = useState('');
+  const [remember, setRemember] = useState(false);
+  const [editing, setEditing] = useState(false);
+  if (state.keyHint && !editing) {
+    return (
+      <div className="ai-key set">
+        <span>Using your API key ending in <code>{state.keyHint}</code>{state.rememberKey ? ', saved in this browser' : ''}.</span>
+        <button disabled={running} onClick={() => session.clearKey()}>Remove</button>
+      </div>
+    );
+  }
+  if (state.available && !editing) {
+    return (
+      <div className="ai-key set">
+        <span className="muted">Using the API key from the dev server.</span>
+        <button disabled={running} onClick={() => setEditing(true)}>Use my own</button>
+      </div>
+    );
+  }
+  const save = () => {
+    if (!draft.trim()) return;
+    session.setKey(draft, remember);
+    setDraft('');
+    setEditing(false);
+  };
+  return (
+    <form className="ai-key" onSubmit={(e) => { e.preventDefault(); save(); }}>
+      <label htmlFor="ai-key-input">Anthropic API key</label>
+      <div className="ai-key-row">
+        <input
+          id="ai-key-input" type="password" value={draft} placeholder="sk-ant-..." autoComplete="off" spellCheck={false}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+        <button type="submit" className={draft.trim() ? 'active' : ''} disabled={!draft.trim()}>Use key</button>
+        {editing && <button type="button" onClick={() => { setEditing(false); setDraft(''); }}>Cancel</button>}
+      </div>
+      <label className="check">
+        <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+        Remember it in this browser
+      </label>
+      <p className="muted small">The key is sent only to the Claude API, straight from this page. Playing spends on that key, up to the limit below.</p>
+    </form>
+  );
+}
+
 export function AiPanel({ session, onClose }: { session: AiSession; onClose: () => void }) {
   const state = useSyncExternalStore(session.subscribe, session.getState);
   const log = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const running = state.status !== 'idle';
+  const canStart = state.keyHint !== '' || state.available === true;
 
   // Keep the newest entry in view unless the reader has scrolled up to look back.
   useEffect(() => {
@@ -54,12 +102,7 @@ export function AiPanel({ session, onClose }: { session: AiSession; onClose: () 
         <h2>AI plays</h2>
         <button className="ghost" onClick={onClose} aria-label="Close">×</button>
       </header>
-      {state.available === false && (
-        <p className="short">
-          No API key found. Set ANTHROPIC_API_KEY or put a key in ~/shiftworks-api-key.txt, then run the game with npm run dev.
-          {' '}<button onClick={() => void session.checkAvailable()}>Check again</button>
-        </p>
-      )}
+      <KeyRow session={session} state={state} running={running} />
       <div className="ai-options">
         <label>Model
           <select value={state.model} disabled={running} onChange={(e) => session.configure({ model: e.target.value })}>
@@ -88,7 +131,7 @@ export function AiPanel({ session, onClose }: { session: AiSession; onClose: () 
       </div>
       <div className="row">
         {state.status === 'idle' ? (
-          <button className="active" disabled={state.available !== true} onClick={() => void session.start()}>
+          <button className="active" disabled={!canStart} onClick={() => void session.start()}>
             {state.log.length ? 'Start again' : 'Start'}
           </button>
         ) : (

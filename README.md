@@ -70,19 +70,25 @@ with the same buildings, costs and rules you have, and it sees the game as
 text: it reads the state, looks at a character map, places buildings, routes
 belts and then waits to see what the factory delivers.
 
-It needs an Anthropic API key, read from `ANTHROPIC_API_KEY` or from a file at
-`~/shiftworks-api-key.txt` (set `SHIFTWORKS_API_KEY_FILE` to use another file).
+**In the game.** Run `npm run dev`, click **AI plays** at the top right, paste
+an Anthropic API key into the panel, and press Start. The AI takes over the map
+you have open, wherever you have got to. Time stands still while it thinks and
+runs fast while it waits for the factory; the panel shows its reasoning, each
+action and what came back, and a running cost estimate. Stop hands the game
+back to you.
 
-**In the game.** Run `npm run dev`, click **AI plays** at the top right, and
-press Start. The AI takes over the map you have open, wherever you have got to.
-Time stands still while it thinks and runs fast while it waits for the factory;
-the panel shows its reasoning, each action and what came back, and a running
-cost estimate. Stop hands the game back to you. The page talks to the dev
-server, which adds the key and forwards the request, so the key never reaches
-the browser. A built copy of the game has no such server and the panel says so.
+A pasted key is sent only to the Claude API, straight from the page. It is
+forgotten when the page closes unless you tick "Remember it in this browser",
+which keeps it in the browser's local storage. Playing spends on that key, up
+to the limit set in the panel.
+
+You can skip the pasting when running the dev server: if `ANTHROPIC_API_KEY` is
+set, or a key is in `~/shiftworks-api-key.txt` (set `SHIFTWORKS_API_KEY_FILE`
+to use another file), the dev server adds that key to the requests it forwards
+and the panel uses it without the key ever reaching the browser.
 
 **From the command line.** This plays a fresh map with no window, as fast as
-the model answers:
+the model answers. It reads the key from the same environment variable or file:
 
 ```bash
 npm run ai -- --seed 7 --max-cost 3
