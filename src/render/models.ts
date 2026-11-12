@@ -108,23 +108,44 @@ function gable(w: number, d: number, h: number, x: number, y: number, z: number,
 }
 
 /** A flat arrowhead lying on a surface, pointing along `angle` (0 is +X). */
-function arrow(size: number, x: number, y: number, z: number, angle: number, color: number): THREE.BufferGeometry {
+function arrow(size: number, x: number, y: number, z: number, angle: number, color: number, glow = false): THREE.BufferGeometry {
   const g = new THREE.ConeGeometry(size * 0.6, size, 3);
   g.rotateZ(-Math.PI / 2);
   g.scale(1, 0.12, 1);
   g.rotateY(angle);
   g.translate(x, y, z);
-  return part(g, color, undefined, false);
+  return part(g, color, glow ? { mode: ANIM_GLOW } : undefined, false);
 }
 
-/** The chute that marks a building's output side. */
+// One colour code on every building: orange is where items come out, blue is
+// where they go in. Both glow so they read from any zoom.
+export const PORT_OUT = 0xff9a1f;
+export const PORT_IN = 0x38b6ff;
+
+/** The output chute: an orange spout on the front with an arrow pointing out. */
 function chute(): THREE.BufferGeometry[] {
   return [
-    box(0.2, 0.06, 0.4, 0.4, 0.1, 0, 0x3a3f4b),
-    box(0.2, 0.14, 0.04, 0.4, 0.14, 0.2, 0xf2c14e),
-    box(0.2, 0.14, 0.04, 0.4, 0.14, -0.2, 0xf2c14e),
-    arrow(0.16, 0.4, 0.17, 0, 0, 0xf2c14e),
+    box(0.22, 0.06, 0.44, 0.39, 0.1, 0, 0x3a3f4b),
+    box(0.22, 0.16, 0.05, 0.39, 0.12, 0.22, PORT_OUT),
+    box(0.22, 0.16, 0.05, 0.39, 0.12, -0.22, PORT_OUT),
+    arrow(0.24, 0.4, 0.18, 0, 0, PORT_OUT, true),
   ];
+}
+
+/** Blue intake hoppers with arrows pointing in, on the sides a building takes items from. */
+function intakes(sides: ('back' | 'left' | 'right')[]): THREE.BufferGeometry[] {
+  const parts: THREE.BufferGeometry[] = [];
+  for (const side of sides) {
+    if (side === 'back') {
+      parts.push(box(0.1, 0.14, 0.4, -0.45, 0.1, 0, 0x1f4f73));
+      parts.push(arrow(0.24, -0.42, 0.26, 0, 0, PORT_IN, true));
+    } else {
+      const z = side === 'right' ? 0.45 : -0.45;
+      parts.push(box(0.4, 0.14, 0.1, 0, 0.1, z, 0x1f4f73));
+      parts.push(arrow(0.24, 0, 0.26, z * 0.94, side === 'right' ? Math.PI / 2 : -Math.PI / 2, PORT_IN, true));
+    }
+  }
+  return parts;
 }
 
 /** A status lamp on a short pole. */
@@ -230,10 +251,11 @@ export function buildSplitter(): THREE.BufferGeometry {
     cyl(0.26, 0.3, 0.1, 0, 0.3, 0, 0x2b3a50, 10),
     part(new THREE.BoxGeometry(0.44, 0.07, 0.1).translate(0, 0.43, 0), 0xf2c14e, { mode: ANIM_SPIN_Y, speed: 4, pivot: [0, 0.43, 0] }, false),
     cyl(0.06, 0.06, 0.1, 0, 0.4, 0, 0xdfe6e9, 6),
-    arrow(0.2, 0.36, 0.31, 0, 0, 0xf2c14e),
-    arrow(0.2, 0, 0.31, 0.36, -Math.PI / 2, 0xf2c14e),
-    arrow(0.2, 0, 0.31, -0.36, Math.PI / 2, 0xf2c14e),
-    box(0.1, 0.08, 0.5, -0.44, 0.12, 0, 0x2b303b),
+    arrow(0.22, 0.36, 0.31, 0, 0, PORT_OUT, true),
+    arrow(0.22, 0, 0.31, 0.36, -Math.PI / 2, PORT_OUT, true),
+    arrow(0.22, 0, 0.31, -0.36, Math.PI / 2, PORT_OUT, true),
+    box(0.1, 0.1, 0.5, -0.44, 0.12, 0, 0x1f4f73),
+    arrow(0.22, -0.36, 0.31, 0, 0, PORT_IN, true),
   ]);
 }
 
@@ -281,6 +303,7 @@ export function buildSawmill(): THREE.BufferGeometry {
     box(0.26, 0.05, 0.14, 0.14, 0.15, -0.28, 0xc9954b),
     part(new THREE.ConeGeometry(0.12, 0.1, 6).translate(-0.28, 0.15, 0.3), 0xe3c28a, undefined, false),
     ...lamp(-0.4, 0.72, -0.4),
+    ...intakes(['back', 'left', 'right']),
     ...chute(),
   ]);
 }
@@ -306,6 +329,7 @@ export function buildKiln(): THREE.BufferGeometry {
     box(0.2, 0.08, 0.12, -0.27, 0.2, 0.34, 0xa64b3c),
     smoke(0), smoke(0.33), smoke(0.66),
     ...lamp(0.2, 0.12, -0.36),
+    ...intakes(['back', 'left', 'right']),
     ...chute(),
   ]);
 }
@@ -318,9 +342,6 @@ export function buildAssembler(): THREE.BufferGeometry {
     box(0.8, 0.34, 0.8, -0.05, 0.1, 0, 0x8d6f9c),
     box(0.84, 0.05, 0.84, -0.05, 0.44, 0, 0x6f567c),
     // Intake hoppers on both sides and the back.
-    box(0.3, 0.16, 0.12, -0.05, 0.2, 0.44, 0x2b2f38),
-    box(0.3, 0.16, 0.12, -0.05, 0.2, -0.44, 0x2b2f38),
-    box(0.12, 0.16, 0.3, -0.48, 0.2, 0, 0x2b2f38),
     // Side panels with vents.
     box(0.02, 0.14, 0.4, 0.36, 0.2, 0, 0x5a4766),
     box(0.03, 0.03, 0.34, 0.37, 0.3, 0, 0xdfe6e9),
@@ -336,6 +357,7 @@ export function buildAssembler(): THREE.BufferGeometry {
     cyl(0.015, 0.015, 0.4, -0.38, 0.49, -0.36, 0xdfe6e9, 4),
     part(new THREE.IcosahedronGeometry(0.04, 0).translate(-0.38, 0.92, -0.36), 0xff5a5a, { mode: ANIM_GLOW }, false),
     ...lamp(-0.38, 0.49, 0.36),
+    ...intakes(['back', 'left', 'right']),
     ...chute(),
   ]);
 }
@@ -357,12 +379,15 @@ export function buildHub(stage: number): THREE.BufferGeometry {
     box(2.7, 0.03, 2.7, 0, 0.12, 0, 0xdccb9f),
   ];
   // Delivery bays: a dark mat on each side where belts come in.
-  const bays = [
-    box(0.5, 0.02, 0.24, 0, 0.15, 1.34, 0x5a4a44),
-    box(0.5, 0.02, 0.24, 0, 0.15, -1.34, 0x5a4a44),
-    box(0.24, 0.02, 0.5, 1.34, 0.15, 0, 0x5a4a44),
-    box(0.24, 0.02, 0.5, -1.34, 0.15, 0, 0x5a4a44),
-  ];
+  const bays: THREE.BufferGeometry[] = [];
+  for (const offset of [-1, 0, 1]) {
+    bays.push(
+      arrow(0.22, offset, 0.17, 1.36, Math.PI / 2, PORT_IN, true),
+      arrow(0.22, offset, 0.17, -1.36, -Math.PI / 2, PORT_IN, true),
+      arrow(0.22, 1.36, 0.17, offset, Math.PI, PORT_IN, true),
+      arrow(0.22, -1.36, 0.17, offset, 0, PORT_IN, true),
+    );
+  }
   if (stage === 0) {
     const fire: Motion = { mode: ANIM_FIRE, p1: 1 };
     return merge([

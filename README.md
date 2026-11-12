@@ -51,6 +51,10 @@ Then open http://localhost:5173.
 - Belts that point into the **town hub** deliver. Deliveries count toward the
   current list and also become building materials. Each delivery list unlocks
   the next building, recipe or resource.
+- **Blue means in, orange means out.** Every building has glowing blue arrows
+  on the sides it takes items from and an orange arrow where it pushes them
+  out. Larger floating arrows show the same thing on the building you are
+  placing, pointing at, or have selected.
 - Each machine has a status lamp: green when working, amber when waiting for
   inputs, red when nothing in front of it takes its output, grey with no recipe.
   A starved or blocked machine also takes on an amber or red wash and its

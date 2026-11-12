@@ -82,3 +82,8 @@ button.active .short { color: #8a1c1c; }
 
 .win { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(8, 12, 18, 0.55); pointer-events: auto !important; }
 .win .panel { max-width: 420px; text-align: center; display: flex; flex-direction: column; gap: 12px; padding: 28px; }
+
+.legend { display: flex; gap: 16px; font-size: 12px; color: var(--text); text-shadow: 0 1px 2px #000; }
+.port { display: inline-block; width: 0; height: 0; border-top: 5px solid transparent; border-bottom: 5px solid transparent; border-left: 9px solid; margin-right: 6px; vertical-align: -1px; }
+.port.in { border-left-color: #38b6ff; }
+.port.out { border-left-color: #ff9a1f; }

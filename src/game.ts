@@ -508,6 +508,18 @@ export class Game {
     }
     if (this.selected && this.sim.world.buildingAt(this.selected.x, this.selected.y) < 0) this.selected = null;
     this.renderer.setSelection(this.selected);
+
+    // Flow arrows: on what you are about to place, else on what you point at,
+    // else on what you have selected.
+    if (this.tool.mode === 'build' && hover) {
+      this.renderer.setPorts({ building: this.tool.building, x: hover.x, y: hover.y, dir: this.toolDir });
+    } else {
+      const at = this.tool.mode === 'none' && hover && this.sim.world.buildingAt(hover.x, hover.y) >= 0 ? hover : this.selected;
+      const slot = at ? this.sim.world.buildingAt(at.x, at.y) : -1;
+      this.renderer.setPorts(slot < 0 ? null : {
+        building: this.sim.kind[slot], x: this.sim.bx[slot], y: this.sim.by[slot], dir: this.sim.dir[slot],
+      });
+    }
   }
 
   // ---- the interface's view of the game -----------------------------------------

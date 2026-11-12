@@ -15,7 +15,8 @@ import { hash3 } from '../sim/hash';
 import { CameraRig } from './camera';
 import {
   buildAssembler, buildBeltCurve, buildBeltStraight, buildBush, buildHub, buildItemShape, buildKiln, buildMiner,
-  buildPine, buildRock, buildRoundTree, buildSawmill, buildSplitter, buildStump, buildTuft, type ItemShape,
+  buildPine, buildRock, buildRoundTree, buildSawmill, buildSplitter, buildStump, buildTuft, PORT_IN, PORT_OUT,
+  type ItemShape,
 } from './models';
 
 const ITEM_Y = 0.19;
@@ -53,6 +54,33 @@ interface SceneryPatch {
   mesh: THREE.InstancedMesh;
   /** Where each piece could stand: its tile, transform and tint. */
   spots: { tile: number; matrix: THREE.Matrix4; color: THREE.Color | null }[];
+}
+
+/** A building whose inputs and outputs should be pointed out with arrows. */
+export interface PortView {
+  building: number;
+  x: number;
+  y: number;
+  dir: number;
+}
+
+const MAX_PORT_ARROWS = 14;
+
+/** A flat arrow lying in the ground plane, pointing along +X. */
+function buildFlowArrow(): THREE.BufferGeometry {
+  const v = [
+    -0.26, -0.075, 0.02, -0.075, 0.02, 0.075,
+    -0.26, -0.075, 0.02, 0.075, -0.26, 0.075,
+    0.02, -0.2, 0.27, 0, 0.02, 0.2,
+  ];
+  const positions = new Float32Array((v.length / 2) * 3);
+  for (let i = 0; i < v.length / 2; i++) {
+    positions[i * 3] = v[i * 2];
+    positions[i * 3 + 2] = v[i * 2 + 1];
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  return geometry;
 }
 
 export interface Ghost {
@@ -322,6 +350,10 @@ export class GameRenderer {
   private readonly ghostMaterial = new THREE.MeshBasicMaterial({ color: 0x7dffa0, transparent: true, opacity: 0.55, depthWrite: false });
   private readonly cursor: THREE.LineLoop;
   private readonly selection: THREE.LineLoop;
+  private readonly portArrows: { mesh: THREE.Mesh; x: number; z: number; dx: number; dz: number; into: boolean }[] = [];
+  private readonly portOut = new THREE.MeshBasicMaterial({ color: PORT_OUT, transparent: true, opacity: 0.95, depthTest: false, side: THREE.DoubleSide });
+  private readonly portIn = new THREE.MeshBasicMaterial({ color: PORT_IN, transparent: true, opacity: 0.95, depthTest: false, side: THREE.DoubleSide });
+  private portCount = 0;
   private readonly raycaster = new THREE.Raycaster();
   private readonly ndc = new THREE.Vector2();
 
@@ -422,6 +454,16 @@ export class GameRenderer {
     this.water.renderOrder = 1;
     this.scene.add(this.water);
 
+    const flowArrow = buildFlowArrow();
+    for (let i = 0; i < MAX_PORT_ARROWS; i++) {
+      const mesh = new THREE.Mesh(flowArrow, this.portOut);
+      mesh.visible = false;
+      mesh.renderOrder = 4;
+      mesh.frustumCulled = false;
+      this.portArrows.push({ mesh, x: 0, z: 0, dx: 0, dz: 0, into: false });
+      this.scene.add(mesh);
+    }
+
     this.cursor = this.makeOutline(0xffffff, 0.5);
     this.selection = this.makeOutline(0xffe08a, 0.56);
     this.scene.add(this.cursor, this.selection);
@@ -477,6 +519,60 @@ export class GameRenderer {
     mesh.position.set(ghost.x + 0.5, 0.02, ghost.y + 0.5);
     mesh.quaternion.copy(this.quaternions[ghost.dir & 3]);
     this.ghostMaterial.color.setHex(ghost.ok ? 0x7dffa0 : 0xff5a5a);
+  }
+
+  /**
+   * Points out where a building takes items in (blue arrows) and where it
+   * pushes them out (orange arrows). Pass null to hide them.
+   */
+  setPorts(view: PortView | null): void {
+    this.portCount = 0;
+    if (view) {
+      const def = BUILDINGS.find((b) => b.id === view.building);
+      const d = view.dir & 3;
+      const back = (d + 2) & 3;
+      const right = (d + 1) & 3;
+      const left = (d + 3) & 3;
+      const cx = view.x + 0.5;
+      const cz = view.y + 0.5;
+      const add = (side: number, into: boolean, reach = 0.8, slide = 0) => {
+        const arrow = this.portArrows[this.portCount++];
+        // `slide` moves the arrow along the edge, for buildings wider than a tile.
+        arrow.x = cx + DX[side] * reach + DX[(side + 1) & 3] * slide;
+        arrow.z = cz + DY[side] * reach + DY[(side + 1) & 3] * slide;
+        const facing = into ? (side + 2) & 3 : side;
+        arrow.dx = DX[facing];
+        arrow.dz = DY[facing];
+        arrow.into = into;
+        arrow.mesh.material = into ? this.portIn : this.portOut;
+        arrow.mesh.quaternion.copy(this.quaternions[facing]);
+      };
+      switch (def?.role) {
+        case 'belt':
+          add(d, false);
+          add(back, true);
+          break;
+        case 'miner':
+          add(d, false);
+          break;
+        case 'machine':
+          add(d, false);
+          add(back, true);
+          add(right, true);
+          add(left, true);
+          break;
+        case 'splitter':
+          add(back, true);
+          add(d, false);
+          add(right, false);
+          add(left, false);
+          break;
+        case 'hub':
+          for (let side = 0; side < 4; side++) for (const slide of [-1, 0, 1]) add(side, true, 1.8, slide);
+          break;
+      }
+    }
+    for (let i = 0; i < this.portArrows.length; i++) this.portArrows[i].mesh.visible = i < this.portCount;
   }
 
   setCursor(tile: { x: number; y: number } | null, color = 0xffffff): void {
@@ -543,6 +639,17 @@ export class GameRenderer {
       this.statusTimer = 0.2;
       this.syncStatus();
     }
+
+    // Flow arrows slide the way items travel. They keep moving while the game is paused.
+    const beat = (performance.now() / 700) % 1;
+    for (let i = 0; i < this.portCount; i++) {
+      const arrow = this.portArrows[i];
+      const shift = (beat - 0.5) * 0.22;
+      arrow.mesh.position.set(arrow.x + arrow.dx * shift, 0.62, arrow.z + arrow.dz * shift);
+    }
+    const pulse = 0.65 + 0.35 * Math.sin(beat * Math.PI);
+    this.portOut.opacity = pulse;
+    this.portIn.opacity = pulse;
 
     this.time.value = ((sim.tick + alpha) / TICKS_PER_SECOND) % 3600;
     const sinceStep = sim.tick - sim.lastBeltStepTick + alpha;

@@ -182,6 +182,10 @@ function BuildBar({ game, state }: { game: Game; state: UiState }) {
           <span className="cost">materials back</span>
         </button>
       </section>
+      <div className="legend">
+        <span><i className="port in" />blue: items go in</span>
+        <span><i className="port out" />orange: items come out</span>
+      </div>
       <div className="keys">
         WASD move · wheel zoom · Q/E turn view · R rotate · F copy building · right-click remove · Esc cancel · Space pause
       </div>
