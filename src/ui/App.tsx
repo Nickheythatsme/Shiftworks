@@ -33,14 +33,13 @@ function TownPanel({ state }: { state: UiState }) {
         </div>
       ))}
       {state.rewards.length > 0 && <p className="reward">Unlocks: {state.rewards.join(', ')}</p>}
-      {state.stock.length > 0 && (
-        <div className="stock">
-          <span className="muted">In the hub</span>
-          {state.stock.map((s) => (
-            <span key={s.name} title={s.name}><i className="swatch" style={{ background: s.color }} />{s.count}</span>
-          ))}
-        </div>
-      )}
+      <div className="stock">
+        <span className="muted">Building materials in the hub</span>
+        {state.stock.length === 0 && <span className="short">None. Deliver goods, or remove a building to get its materials back.</span>}
+        {state.stock.map((s) => (
+          <span key={s.name} title={s.name}><i className="swatch" style={{ background: s.color }} />{s.name} {s.count}</span>
+        ))}
+      </div>
     </section>
   );
 }
@@ -143,22 +142,31 @@ function BuildBar({ game, state }: { game: Game; state: UiState }) {
       {state.message && <div className="message">{state.message}</div>}
       <div className="hint">
         {active
-          ? `${active.hint} Facing ${ARROWS[state.toolDir]} — R turns it.`
+          ? `${active.hint} Costs ${active.cost.map((c) => `${c.count} ${c.name.toLowerCase()}`).join(' + ')}. Facing ${ARROWS[state.toolDir]}, R turns it.`
           : tool.mode === 'delete'
-            ? 'Click or drag to remove buildings.'
+            ? 'Click or drag to remove buildings. Their materials go back to the hub.'
             : state.hover || 'Pick something to build, or click a building to inspect it.'}
       </div>
       <section className="panel build-bar">
         {state.buildBar.map((b) => (
           <button
             key={b.id}
-            className={tool.mode === 'build' && tool.building === b.id ? 'active' : ''}
+            className={(tool.mode === 'build' && tool.building === b.id ? 'active' : '') + (b.affordable ? '' : ' poor')}
             onClick={() => game.setTool(tool.mode === 'build' && tool.building === b.id ? { mode: 'none' } : { mode: 'build', building: b.id })}
-            title={b.hint}
+            title={`${b.hint} Costs ${b.cost.map((c) => `${c.count} ${c.name.toLowerCase()}`).join(', ')}.`}
           >
-            <i className="chip" style={{ background: b.color }} />
-            <span>{b.name}</span>
-            <kbd>{b.hotkey}</kbd>
+            <span className="build-name">
+              <i className="chip" style={{ background: b.color }} />
+              <span>{b.name}</span>
+              <kbd>{b.hotkey}</kbd>
+            </span>
+            <span className="cost">
+              {b.cost.map((c) => (
+                <span key={c.name} className={c.enough ? '' : 'short'}>
+                  <i className="swatch" style={{ background: c.color }} />{c.count}
+                </span>
+              ))}
+            </span>
           </button>
         ))}
         <button
@@ -166,9 +174,12 @@ function BuildBar({ game, state }: { game: Game; state: UiState }) {
           onClick={() => game.setTool(tool.mode === 'delete' ? { mode: 'none' } : { mode: 'delete' })}
           title="Remove buildings. Right-click also removes."
         >
-          <i className="chip remove" />
-          <span>Remove</span>
-          <kbd>X</kbd>
+          <span className="build-name">
+            <i className="chip remove" />
+            <span>Remove</span>
+            <kbd>X</kbd>
+          </span>
+          <span className="cost">materials back</span>
         </button>
       </section>
       <div className="keys">

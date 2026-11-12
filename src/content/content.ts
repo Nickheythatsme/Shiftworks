@@ -53,21 +53,26 @@ export interface BuildingDef {
   role: 'belt' | 'splitter' | 'miner' | 'machine' | 'hub';
   color: number;
   hint: string;
+  /** Materials taken from the hub to build it, and returned when it is removed. */
+  cost: { item: string; count: number }[];
   /** The player cannot place or remove it. */
   fixed?: boolean;
 }
 
 // Building id 0 means "empty slot". Ids are stable: they are written into saves.
+// Costs rise with complexity: simple buildings take raw materials, later ones
+// take the parts the factory has learned to make. Removing a building returns
+// its full cost, so redesigning is never punished.
 // The order here is the order of the build bar, which follows the unlock order
 // so number keys never shift under the player's fingers.
 export const BUILDINGS: BuildingDef[] = [
-  { id: 1, key: 'belt', name: 'Belt', size: 1, role: 'belt', color: 0x3b4252, hint: 'Carries items forward. Point a belt into the side of another to merge.' },
-  { id: 3, key: 'miner', name: 'Miner', size: 1, role: 'miner', color: 0xd08770, hint: 'Place on a deposit. Pushes the resource out of its front.' },
-  { id: 4, key: 'sawmill', name: 'Sawmill', size: 1, role: 'machine', color: 0xa3be8c, hint: 'Cuts timber into planks.' },
-  { id: 5, key: 'kiln', name: 'Kiln', size: 1, role: 'machine', color: 0xbf616a, hint: 'Fires one input into one output. Pick the recipe.' },
-  { id: 2, key: 'splitter', name: 'Splitter', size: 1, role: 'splitter', color: 0x5e81ac, hint: 'Takes items from behind and shares them between front, left and right.' },
-  { id: 6, key: 'assembler', name: 'Assembler', size: 1, role: 'machine', color: 0xb48ead, hint: 'Combines two inputs into one part. Pick the recipe.' },
-  { id: 7, key: 'hub', name: 'Town hub', size: 3, role: 'hub', color: 0xebcb8b, hint: 'Deliver goods here to grow the town.', fixed: true },
+  { id: 1, key: 'belt', name: 'Belt', size: 1, role: 'belt', color: 0x3b4252, hint: 'Carries items forward. Point a belt into the side of another to merge.', cost: [{ item: 'timber', count: 1 }] },
+  { id: 3, key: 'miner', name: 'Miner', size: 1, role: 'miner', color: 0xd08770, hint: 'Place on a deposit. Pushes the resource out of its front.', cost: [{ item: 'timber', count: 4 }, { item: 'stone', count: 4 }] },
+  { id: 4, key: 'sawmill', name: 'Sawmill', size: 1, role: 'machine', color: 0xa3be8c, hint: 'Cuts timber into planks.', cost: [{ item: 'timber', count: 10 }, { item: 'stone', count: 6 }] },
+  { id: 5, key: 'kiln', name: 'Kiln', size: 1, role: 'machine', color: 0xbf616a, hint: 'Fires one input into one output. Pick the recipe.', cost: [{ item: 'stone', count: 10 }, { item: 'planks', count: 8 }] },
+  { id: 2, key: 'splitter', name: 'Splitter', size: 1, role: 'splitter', color: 0x5e81ac, hint: 'Takes items from behind and shares them between front, left and right.', cost: [{ item: 'planks', count: 4 }, { item: 'iron_plate', count: 2 }] },
+  { id: 6, key: 'assembler', name: 'Assembler', size: 1, role: 'machine', color: 0xb48ead, hint: 'Combines two inputs into one part. Pick the recipe.', cost: [{ item: 'bricks', count: 12 }, { item: 'iron_plate', count: 12 }, { item: 'planks', count: 8 }] },
+  { id: 7, key: 'hub', name: 'Town hub', size: 3, role: 'hub', color: 0xebcb8b, hint: 'Deliver goods here to grow the town.', cost: [], fixed: true },
 ];
 
 export interface RecipeDef {
@@ -109,6 +114,15 @@ export interface GoalDef {
     growMap?: boolean;
   };
 }
+
+/**
+ * Materials in the hub when a game starts: enough for a couple of miners and
+ * the first belts. Everything after that has to be delivered.
+ */
+export const STARTING_STOCK: { item: string; count: number }[] = [
+  { item: 'timber', count: 60 },
+  { item: 'stone', count: 20 },
+];
 
 /** What the player has before the first delivery. */
 export const STARTING_UNLOCKS = {

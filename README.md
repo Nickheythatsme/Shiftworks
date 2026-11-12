@@ -44,7 +44,12 @@ Then open http://localhost:5173.
   product out of its front. There are no inserters: orientation is the puzzle.
 - A **splitter** takes items from behind and shares them between its front,
   left and right.
-- Belts that point into the **town hub** deliver. Each delivery list unlocks
+- **Every building costs materials**, taken from what has been delivered to the
+  hub. Belts and miners take raw timber and stone; kilns, splitters and
+  assemblers take parts the factory has to make first. Removing a building
+  returns its materials in full. A new game starts with 60 timber and 20 stone.
+- Belts that point into the **town hub** deliver. Deliveries count toward the
+  current list and also become building materials. Each delivery list unlocks
   the next building, recipe or resource.
 - Machines are tinted amber when they are waiting for inputs and red when
   nothing in front of them takes their output.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { GOALS, itemId, recipeId, buildingId } from '../src/content/content';
-import { HUB_X, HUB_Y, STATUS_BLOCKED, STATUS_STARVED, Sim, loadSim, saveSim } from '../src/sim';
+import { HUB_X, HUB_Y, SAVE_VERSION, STATUS_BLOCKED, STATUS_STARVED, Sim, loadSim, saveSim } from '../src/sim';
 import { buildBenchFactory } from '../src/tools/benchFactory';
 import {
   ASSEMBLER, BELT, COAL_X, EAST, IRON_X, KILN, MINER, NORTH, ROW, SAWMILL, SOUTH, SPLITTER, STONE_X, TIMBER_X, WEST,
@@ -235,8 +235,8 @@ describe('machines', () => {
 });
 
 describe('the town', () => {
-  it('completes a delivery list, takes the goods and unlocks the next step', () => {
-    const sim = new Sim({ seed: 3, worldType: 'test' });
+  it('completes a delivery list and unlocks the next step', () => {
+    const sim = new Sim({ seed: 3, worldType: 'test', freeBuild: true });
     expect(sim.unlockedBuildings[SAWMILL]).toBe(0);
     place(sim, MINER, TIMBER_X, ROW, SOUTH);
     belts(sim, TIMBER_X, ROW + 1, SOUTH, 5);
@@ -245,7 +245,8 @@ describe('the town', () => {
     run(sim, 30 * 120);
     expect(sim.goalIndex).toBeGreaterThanOrEqual(1);
     expect(sim.unlockedBuildings[SAWMILL]).toBe(1);
-    expect(sim.delivered[TIMBER] - sim.stock[TIMBER]).toBe(GOALS[0].needs[0].count);
+    // Deliveries stay in the hub as building material.
+    expect(sim.stock[TIMBER]).toBe(60 + sim.delivered[TIMBER]);
     expect(sim.events.some((e) => e.type === 'goal' && e.index === 0)).toBe(true);
   });
 
@@ -254,7 +255,7 @@ describe('the town', () => {
     const radius = sim.world.radius;
     const hamlet = GOALS.findIndex((g) => g.unlocks.growMap);
     sim.goalIndex = hamlet;
-    for (const need of GOALS[hamlet].needs) sim.stock[itemId(need.item)] = need.count;
+    for (const need of GOALS[hamlet].needs) sim.goalProgress[itemId(need.item)] = need.count;
     run(sim, 31);
     expect(sim.world.radius).toBe(radius + 1);
     expect(sim.unlockedResources[itemId('coal')]).toBe(1);
@@ -262,15 +263,21 @@ describe('the town', () => {
     expect(sim.placeError(BELT, sim.world.minTile, sim.world.minTile)).toBeNull();
   });
 
+  it('does not count the starting materials toward a delivery list', () => {
+    const sim = new Sim({ seed: 3, worldType: 'test' });
+    expect(sim.stock[TIMBER]).toBeGreaterThanOrEqual(GOALS[0].needs[0].count);
+    run(sim, 90);
+    expect(sim.goalIndex).toBe(0);
+  });
+
   it('announces the win after the last list', () => {
     const sim = new Sim({ seed: 3, worldType: 'test' });
     for (let g = 0; g < GOALS.length; g++) {
-      for (const need of GOALS[g].needs) sim.stock[itemId(need.item)] += need.count;
+      for (const need of GOALS[g].needs) sim.goalProgress[itemId(need.item)] = need.count;
+      run(sim, 30);
     }
-    run(sim, 30 * (GOALS.length + 1));
     expect(sim.goalIndex).toBe(GOALS.length);
     expect(sim.events.at(-1)).toEqual({ type: 'won' });
-    for (const need of GOALS[0].needs) expect(sim.stock[itemId(need.item)]).toBe(0);
   });
 });
 
@@ -303,6 +310,73 @@ function scriptedGame(seed: number, ticks: number, saveAt = -1): Sim {
   return sim;
 }
 
+describe('building costs', () => {
+  const STONE = itemId('stone');
+
+  it('takes materials from the hub when building and returns them when removing', () => {
+    const sim = new Sim({ seed: 3, worldType: 'test' });
+    const timber = sim.stock[TIMBER];
+    const stone = sim.stock[STONE];
+    place(sim, MINER, TIMBER_X, ROW, SOUTH);
+    place(sim, BELT, TIMBER_X, ROW + 1, SOUTH);
+    run(sim, 1);
+    expect(sim.stock[TIMBER]).toBe(timber - 4 - 1);
+    expect(sim.stock[STONE]).toBe(stone - 4);
+    sim.enqueue({ type: 'remove', x: TIMBER_X, y: ROW });
+    sim.enqueue({ type: 'remove', x: TIMBER_X, y: ROW + 1 });
+    run(sim, 1);
+    expect(sim.stock[TIMBER]).toBe(timber);
+    expect(sim.stock[STONE]).toBe(stone);
+  });
+
+  it('refuses a building the hub cannot pay for, and builds nothing', () => {
+    const sim = new Sim({ seed: 3, worldType: 'test' });
+    sim.stock[STONE] = 3;
+    expect(sim.placeError(MINER, TIMBER_X, ROW)).toMatch(/Not enough stone/);
+    expect(sim.canAfford(MINER)).toBe(false);
+    place(sim, MINER, TIMBER_X, ROW, SOUTH);
+    run(sim, 1);
+    expect(slotAt(sim, TIMBER_X, ROW)).toBe(-1);
+    expect(sim.stock[STONE]).toBe(3);
+  });
+
+  it('stops a queued run of belts when the timber runs out', () => {
+    const sim = new Sim({ seed: 3, worldType: 'test' });
+    sim.stock[TIMBER] = 5;
+    belts(sim, TIMBER_X, ROW + 1, EAST, 9);
+    run(sim, 1);
+    expect(sim.count - 1).toBe(5);
+    expect(sim.stock[TIMBER]).toBe(0);
+  });
+
+  it('turns a belt for free', () => {
+    const sim = new Sim({ seed: 3, worldType: 'test' });
+    place(sim, BELT, TIMBER_X, ROW + 1, EAST);
+    run(sim, 1);
+    sim.stock[TIMBER] = 0;
+    expect(sim.placeError(BELT, TIMBER_X, ROW + 1)).toBeNull();
+    place(sim, BELT, TIMBER_X, ROW + 1, SOUTH);
+    sim.enqueue({ type: 'rotate', x: TIMBER_X, y: ROW + 1 });
+    run(sim, 1);
+    expect(sim.dir[slotAt(sim, TIMBER_X, ROW + 1)]).toBe(WEST);
+    expect(sim.stock[TIMBER]).toBe(0);
+  });
+
+  it('asks for made parts for the more complex buildings', () => {
+    const sim = new Sim({ seed: 3, worldType: 'test', unlockAll: true });
+    expect(sim.placeError(KILN, STONE_X, ROW + 1)).toMatch(/planks/);
+    expect(sim.placeError(ASSEMBLER, STONE_X, ROW + 1)).toMatch(/bricks|iron plate/);
+    sim.stock[itemId('planks')] = 8;
+    sim.stock[itemId('bricks')] = 12;
+    sim.stock[IRON_PLATE] = 12;
+    expect(sim.placeError(ASSEMBLER, STONE_X, ROW + 1)).toBeNull();
+    place(sim, ASSEMBLER, STONE_X, ROW + 1, SOUTH);
+    run(sim, 1);
+    expect(sim.stock[itemId('bricks')]).toBe(0);
+    expect(sim.stock[IRON_PLATE]).toBe(0);
+  });
+});
+
 describe('determinism and saves', () => {
   it('gives the same state for the same seed and commands', () => {
     const a = scriptedGame(11, 3000);
@@ -328,7 +402,7 @@ describe('determinism and saves', () => {
     expect(() => loadSim(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9]))).toThrow(/not a Shiftworks save/);
     const bytes = saveSim(testSim());
     const text = new TextDecoder().decode(bytes.subarray(8));
-    const patched = new TextEncoder().encode(text.replace('"version":1', '"version":9'));
+    const patched = new TextEncoder().encode(text.replace(`"version":${SAVE_VERSION}`, '"version":9'));
     const other = new Uint8Array(8 + patched.length);
     other.set(bytes.subarray(0, 8));
     other.set(patched, 8);

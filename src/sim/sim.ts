@@ -11,9 +11,11 @@ import {
   BUILDINGS,
   BUILDING_BY_ID,
   GOALS,
+  ITEM_BY_ID,
   ITEM_COUNT,
   MINER_SECONDS,
   RECIPES,
+  STARTING_STOCK,
   STARTING_UNLOCKS,
   TICKS_PER_SECOND,
   buildingId,
@@ -63,6 +65,8 @@ export interface SimOptions {
   worldType?: WorldType;
   /** Start with every building, recipe and resource unlocked. For tests and benchmarks. */
   unlockAll?: boolean;
+  /** Buildings cost nothing. For tests and benchmarks. */
+  freeBuild?: boolean;
   /** Internal: build an empty shell for a save to be loaded into. */
   blank?: boolean;
 }
@@ -117,6 +121,8 @@ export class Sim {
   // ---- town ----
   stock = new Uint32Array(ITEM_COUNT);
   delivered = new Uint32Array(ITEM_COUNT);
+  /** Deliveries counted toward the current list, per item. Reset when a list completes. */
+  goalProgress = new Uint32Array(ITEM_COUNT);
   goalIndex = 0;
   unlockedBuildings = new Uint8Array(BUILDINGS.length + 1);
   unlockedRecipes = new Uint8Array(RECIPES.length + 1);
@@ -140,6 +146,10 @@ export class Sim {
   readonly minerTicks = toTicks(MINER_SECONDS);
   private readonly recipes: (RecipeRuntime | undefined)[] = [];
   private readonly roleOf = new Uint8Array(BUILDINGS.length + 1);
+  /** Build cost per building id, as [item id, count] pairs. */
+  private readonly costs: [number, number][][] = [];
+  /** How many of each item the current delivery list asks for. */
+  private goalNeed = new Uint32Array(ITEM_COUNT);
 
   private queue: Command[] = [];
   /** Every command applied, with the tick it ran on. Enough to replay a game. */
@@ -150,7 +160,10 @@ export class Sim {
   constructor(options: SimOptions) {
     this.options = options;
     this.world = new World(options.seed, options.worldType ?? 'normal', START_RADIUS);
-    for (const b of BUILDINGS) this.roleOf[b.id] = ROLE_CODE[b.role];
+    for (const b of BUILDINGS) {
+      this.roleOf[b.id] = ROLE_CODE[b.role];
+      this.costs[b.id] = options.freeBuild ? [] : b.cost.map((c) => [itemId(c.item), c.count]);
+    }
     for (const r of RECIPES) {
       const a = r.inputs[0];
       const b = r.inputs[1];
@@ -166,6 +179,8 @@ export class Sim {
       };
     }
     if (options.blank) return;
+    this.loadGoalNeed();
+    for (const s of STARTING_STOCK) this.stock[itemId(s.item)] = s.count;
 
     if (options.unlockAll) {
       this.unlockedBuildings.fill(1);
@@ -235,7 +250,22 @@ export class Sim {
       if (!deposit) return 'A miner needs a deposit under it.';
       if (!this.unlockedResources[deposit]) return 'The town cannot use this resource yet.';
     }
+    // Turning a belt that is already there is free.
+    if (this.world.buildingAt(x, y) >= 0) return null;
+    for (const [item, count] of this.costs[building]) {
+      if (this.stock[item] < count) {
+        return `Not enough ${ITEM_BY_ID[item]?.name.toLowerCase() ?? 'materials'} in the hub: ${def.name} needs ${count}.`;
+      }
+    }
     return null;
+  }
+
+  /** Whether the hub holds the materials for one of this building. */
+  canAfford(building: number): boolean {
+    for (const [item, count] of this.costs[building] ?? []) {
+      if (this.stock[item] < count) return false;
+    }
+    return true;
   }
 
   /** A number that is equal for two simulations exactly when their states match. */
@@ -249,6 +279,7 @@ export class Sim {
     h = fnv1a(h, this.freeList, this.freeCount * 4);
     h = fnv1a(h, this.stock);
     h = fnv1a(h, this.delivered);
+    h = fnv1a(h, this.goalProgress);
     h = fnv1a(h, this.unlockedBuildings);
     h = fnv1a(h, this.unlockedRecipes);
     h = fnv1a(h, this.unlockedResources);
@@ -349,6 +380,7 @@ export class Sim {
       this.changed();
       return true;
     }
+    for (const [item, count] of this.costs[building]) this.stock[item] -= count;
     const slot = this.allocate();
     this.kind[slot] = building;
     this.bx[slot] = x;
@@ -364,6 +396,8 @@ export class Sim {
   private remove(x: number, y: number): boolean {
     const slot = this.world.buildingAt(x, y);
     if (slot < 0 || BUILDING_BY_ID[this.kind[slot]]?.fixed) return false;
+    // Materials go back to the hub in full. What the building was holding is lost.
+    for (const [item, count] of this.costs[this.kind[slot]]) this.stock[item] += count;
     this.occupy(slot, -1);
     this.clearSlot(slot);
     this.freeList[this.freeCount++] = slot;
@@ -458,6 +492,7 @@ export class Sim {
       if (this.kind[s]) this.occupy(s, s);
     }
     this.lastBeltStepTick = this.tick;
+    this.loadGoalNeed();
     this.changed();
   }
 
@@ -577,8 +612,11 @@ export class Sim {
         return false;
       }
       case ROLE_HUB:
+        // Everything delivered becomes building material, and also counts
+        // toward the current list if the list asks for it.
         this.stock[item]++;
         this.delivered[item]++;
+        if (this.goalNeed[item] !== 0) this.goalProgress[item]++;
         return true;
       default:
         return false;
@@ -671,19 +709,25 @@ export class Sim {
     if (role === ROLE_BELT || role === ROLE_SPLITTER) stack.push(t);
   }
 
+  private loadGoalNeed(): void {
+    this.goalNeed.fill(0);
+    for (const need of GOALS[this.goalIndex]?.needs ?? []) this.goalNeed[itemId(need.item)] = need.count;
+  }
+
   private updateTown(): void {
     const goal = GOALS[this.goalIndex];
     if (!goal) return;
     for (const need of goal.needs) {
-      if (this.stock[itemId(need.item)] < need.count) return;
+      if (this.goalProgress[itemId(need.item)] < need.count) return;
     }
-    for (const need of goal.needs) this.stock[itemId(need.item)] -= need.count;
     for (const key of goal.unlocks.buildings ?? []) this.unlockedBuildings[buildingId(key)] = 1;
     for (const key of goal.unlocks.recipes ?? []) this.unlockedRecipes[recipeId(key)] = 1;
     for (const key of goal.unlocks.resources ?? []) this.unlockedResources[itemId(key)] = 1;
     if (goal.unlocks.growMap) this.world.growTo(this.world.radius + 1);
     this.events.push({ type: 'goal', index: this.goalIndex });
     this.goalIndex++;
+    this.goalProgress.fill(0);
+    this.loadGoalNeed();
     if (this.goalIndex === GOALS.length) this.events.push({ type: 'won' });
   }
 }

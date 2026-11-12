@@ -18,7 +18,7 @@ export interface BenchSize {
  * that dead-ends, so belts fill up and stay full: the worst case for the tick.
  */
 export function buildBenchFactory(size: BenchSize, seed = 1): Sim {
-  const sim = new Sim({ seed, worldType: 'test', unlockAll: true });
+  const sim = new Sim({ seed, worldType: 'test', unlockAll: true, freeBuild: true });
   if (size.radius) sim.world.growTo(size.radius);
   const belt = buildingId('belt');
   const miner = buildingId('miner');

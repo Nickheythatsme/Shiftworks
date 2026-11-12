@@ -5,7 +5,7 @@
 import { Sim } from './sim';
 import type { WorldType } from './world';
 
-export const SAVE_VERSION = 1;
+export const SAVE_VERSION = 2;
 const MAGIC = 0x54464853; // "SHFT", little-endian
 
 interface Header {
@@ -19,6 +19,7 @@ interface Header {
   freeCount: number;
   goalIndex: number;
   totalMined: number;
+  freeBuild: boolean;
   arrays: { name: string; bytes: number }[];
 }
 
@@ -27,6 +28,7 @@ function townArrays(sim: Sim): { name: string; array: Uint8Array | Uint32Array |
     { name: 'freeList', array: sim.freeList, bytes: sim.freeCount * 4 },
     { name: 'stock', array: sim.stock, bytes: sim.stock.byteLength },
     { name: 'delivered', array: sim.delivered, bytes: sim.delivered.byteLength },
+    { name: 'goalProgress', array: sim.goalProgress, bytes: sim.goalProgress.byteLength },
     { name: 'unlockedBuildings', array: sim.unlockedBuildings, bytes: sim.unlockedBuildings.byteLength },
     { name: 'unlockedRecipes', array: sim.unlockedRecipes, bytes: sim.unlockedRecipes.byteLength },
     { name: 'unlockedResources', array: sim.unlockedResources, bytes: sim.unlockedResources.byteLength },
@@ -53,6 +55,7 @@ export function saveSim(sim: Sim): Uint8Array {
     freeCount: sim.freeCount,
     goalIndex: sim.goalIndex,
     totalMined: sim.totalMined,
+    freeBuild: sim.options.freeBuild === true,
     arrays: parts.map((p) => ({ name: p.name, bytes: p.view.byteLength })),
   };
   const headerBytes = new TextEncoder().encode(JSON.stringify(header));
@@ -87,7 +90,7 @@ export function loadSim(data: Uint8Array): Sim {
     throw new Error(`This save is from format version ${header.version}; this build reads version ${SAVE_VERSION}.`);
   }
 
-  const sim = new Sim({ seed: header.seed, worldType: header.worldType, blank: true });
+  const sim = new Sim({ seed: header.seed, worldType: header.worldType, freeBuild: header.freeBuild, blank: true });
   sim.world.growTo(header.radius);
   sim.reserve(header.count);
   sim.tick = header.tick;

@@ -41,7 +41,15 @@ export interface UiState {
   rewards: string[];
   won: boolean;
   stock: { name: string; color: string; count: number }[];
-  buildBar: { id: number; name: string; color: string; hint: string; hotkey: string }[];
+  buildBar: {
+    id: number;
+    name: string;
+    color: string;
+    hint: string;
+    hotkey: string;
+    affordable: boolean;
+    cost: { name: string; color: string; count: number; enough: boolean }[];
+  }[];
   tool: Tool;
   /** The tool's facing as it appears on screen: 0 right, 1 down, 2 left, 3 up. */
   toolDir: number;
@@ -529,7 +537,7 @@ export class Game {
     const goal = GOALS[sim.goalIndex];
     const needs: UiNeed[] = (goal?.needs ?? []).map((n) => {
       const item = ITEM_BY_KEY.get(n.item)!;
-      return { name: item.name, color: hex(item.color), have: Math.min(sim.stock[item.id], n.count), need: n.count };
+      return { name: item.name, color: hex(item.color), have: Math.min(sim.goalProgress[item.id], n.count), need: n.count };
     });
 
     return {
@@ -546,7 +554,18 @@ export class Game {
       rewards: goal ? this.rewardNames(sim.goalIndex) : [],
       won: this.won,
       stock: ITEMS.filter((i) => sim.stock[i.id] > 0).map((i) => ({ name: i.name, color: hex(i.color), count: sim.stock[i.id] })),
-      buildBar: this.buildable().map((b, i) => ({ id: b.id, name: b.name, color: hex(b.color), hint: b.hint, hotkey: String(i + 1) })),
+      buildBar: this.buildable().map((b, i) => ({
+        id: b.id,
+        name: b.name,
+        color: hex(b.color),
+        hint: b.hint,
+        hotkey: String(i + 1),
+        affordable: sim.canAfford(b.id),
+        cost: b.cost.map((c) => {
+          const item = ITEM_BY_KEY.get(c.item)!;
+          return { name: item.name, color: hex(item.color), count: c.count, enough: sim.stock[item.id] >= c.count };
+        }),
+      })),
       tool: this.tool,
       toolDir: (this.toolDir + this.renderer.rig.turns) & 3,
       hover: this.describeHover(),

@@ -13,9 +13,9 @@ export const SOUTH = 1;
 export const WEST = 2;
 export const NORTH = 3;
 
-/** Test map: all land, deposits on rows where y % 8 === 0, resource by 16-tile band. */
+/** Test map with everything unlocked and free: all land, deposits on rows where y % 8 === 0, resource by 16-tile band. */
 export function testSim(seed = 1): Sim {
-  return new Sim({ seed, worldType: 'test', unlockAll: true });
+  return new Sim({ seed, worldType: 'test', unlockAll: true, freeBuild: true });
 }
 
 /** A deposit row well away from the hub. Timber starts at X0, then stone, iron, copper, coal. */
