@@ -108,3 +108,7 @@ select:disabled, button:disabled { opacity: 0.55; cursor: default; }
 .ai-entry.tool pre { margin: 2px 0 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ai-entry.tool pre.open { white-space: pre; overflow-x: auto; text-overflow: clip; }
 .ai-entry.tool.bad pre { color: var(--bad); }
+.legend { display: flex; gap: 16px; font-size: 12px; color: var(--text); text-shadow: 0 1px 2px #000; }
+.port { display: inline-block; width: 0; height: 0; border-top: 5px solid transparent; border-bottom: 5px solid transparent; border-left: 9px solid; margin-right: 6px; vertical-align: -1px; }
+.port.in { border-left-color: #38b6ff; }
+.port.out { border-left-color: #ff9a1f; }
