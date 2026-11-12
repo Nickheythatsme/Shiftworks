@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BUILDING_BY_ID, GOALS, TICKS_PER_SECOND, buildingId, itemId, recipeId, type BuildingKey } from '../src/content/content';
+import { BUILDING_BY_ID, GOALS, TECHS, TICKS_PER_SECOND, buildingId, itemId, recipeId, type BuildingKey } from '../src/content/content';
 import { HUB_X, HUB_Y, ROLE_MACHINE, ROLE_MINER, Sim, type Command } from '../src/sim';
 import { ASSEMBLER, BELT, EAST, KILN, MINER, NORTH, SAWMILL, SOUTH, WEST, belts, place } from './helpers';
 
@@ -72,7 +72,7 @@ function costOf(commands: Command[]): Map<number, number> {
 }
 
 describe('a full playthrough', () => {
-  it('passes every list and gate paying for every building from deliveries', () => {
+  it('passes every gate, paying for every building and tech from deliveries', () => {
     const sim = new Sim({ seed: 9, worldType: 'test' });
     const unlockedB = (key: BuildingKey) => sim.unlockedBuildings[buildingId(key)] === 1;
     const unlockedR = (key: string) => sim.unlockedRecipes[recipeId(key)] === 1;
@@ -131,8 +131,20 @@ describe('a full playthrough', () => {
 
     let next = 0;
     const passedAt: string[] = [];
+    const learnedAt: string[] = [];
+    let buying = 0;
     const limit = TICKS_PER_SECOND * 60 * 240;
     while (sim.goalIndex < GOALS.length && sim.tick < limit) {
+      // The town learns each thing as soon as the hub can pay for it.
+      if (sim.tick % TICKS_PER_SECOND === 0) {
+        for (const t of TECHS) {
+          if (sim.techError(t.id) === null) {
+            sim.enqueue({ type: 'research', tech: t.id });
+            buying = t.id;
+            break;
+          }
+        }
+      }
       const step = steps[next];
       if (step && step.ready()) {
         let affordable = true;
@@ -144,6 +156,8 @@ describe('a full playthrough', () => {
       }
       const before = sim.goalIndex;
       sim.step();
+      if (buying && sim.researched[buying]) learnedAt.push(`${TECHS.find((t) => t.id === buying)!.key} ${(sim.tick / TICKS_PER_SECOND / 60).toFixed(1)}m`);
+      buying = 0;
       if (sim.goalIndex !== before) passedAt.push(`${GOALS[before].key} ${(sim.tick / TICKS_PER_SECOND / 60).toFixed(1)}m`);
     }
 
@@ -152,6 +166,8 @@ describe('a full playthrough', () => {
     const minutes = sim.tick / TICKS_PER_SECOND / 60;
     console.log(`Full arc: ${minutes.toFixed(1)} minutes of game time, ${machines} miners and machines`);
     console.log(`Passed at: ${passedAt.join(', ')}`);
+    console.log(`Learned at: ${learnedAt.join(', ')}`);
+    expect(learnedAt.length).toBe(TECHS.length);
     expect(sim.goalIndex).toBe(GOALS.length);
     expect(sim.events.at(-1)).toEqual({ type: 'won' });
     expect(next).toBe(steps.length);

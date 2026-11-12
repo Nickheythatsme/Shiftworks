@@ -115,6 +115,8 @@ export interface GoalDef {
   rates?: { item: string; perMinute: number }[];
   /** Seconds the rates must be held. The count pauses when a rate drops; it does not reset. */
   holdSeconds?: number;
+  /** What the town takes out of the hub's stock while this goal is current. */
+  consumes?: { item: string; perMinute: number }[];
   unlocks: {
     buildings?: BuildingKey[];
     recipes?: string[];
@@ -143,63 +145,98 @@ export const STARTING_UNLOCKS = {
 /** Deliveries are counted over this many seconds to give a rate per minute. */
 export const RATE_WINDOW_SECONDS = 60;
 
-// The town's delivery lists, in order. Finishing one unlocks the next step.
-// Tier 1 and the two-input half of tier 2 from the tech tree. A list with
-// `needs` asks for a one-off quantity and teaches a new product; a list with
-// `rates` is a tier gate that the town only passes once the factory is big
-// enough to keep those goods arriving. Gate rates sit a little under a whole
-// number of machines (100 a minute is three sawmills' 120, or four kilns' 120)
-// so that the right number of machines holds the rate without flickering.
+// The town's stages. Each entry is the gate out of that stage: the town moves
+// up once the factory is big enough to keep the gate's goods arriving. Gate
+// rates sit a little under a whole number of machines (100 a minute is three
+// sawmills' 120, or four kilns' 120) so that the right number of machines
+// holds the rate without flickering.
+//
+// From the hamlet on, the town also uses goods: it takes them out of the hub's
+// stock, the same stock buildings are paid from, and a gate's count pauses
+// while the town is short of anything.
 export const GOALS: GoalDef[] = [
   {
-    key: 'first_timber', stage: 'Camp', title: 'Firewood for the camp',
-    text: 'Put a miner on the timber stand and run a belt to the hub.',
-    needs: [{ item: 'timber', count: 20 }],
-    unlocks: { buildings: ['sawmill'], recipes: ['planks'] },
-  },
-  {
-    key: 'planks', stage: 'Camp', title: 'Shelter',
-    text: 'Saw timber into planks.',
-    needs: [{ item: 'planks', count: 30 }],
-    unlocks: { buildings: ['kiln'], recipes: ['bricks', 'iron_plate'] },
-  },
-  {
-    key: 'kiln_goods', stage: 'Camp', title: 'Hearths and nails',
-    text: 'Fire stone into bricks and iron ore into plate.',
-    needs: [{ item: 'bricks', count: 40 }, { item: 'iron_plate', count: 40 }],
-    unlocks: { buildings: ['splitter'] },
-  },
-  {
     key: 'hamlet', stage: 'Camp', title: 'Become a hamlet',
-    text: 'Keep all three camp goods arriving at this rate, together, for three minutes. One machine of each is not enough: add miners and machines, and use splitters to share a line between them.',
+    text: 'The camp becomes a hamlet once all three goods keep arriving at this rate, together, for three minutes. Start with a miner on timber and a belt to the hub, then buy the sawmill below.',
     needs: [],
     rates: [{ item: 'planks', perMinute: 100 }, { item: 'bricks', perMinute: 100 }, { item: 'iron_plate', perMinute: 100 }],
     holdSeconds: 180,
-    unlocks: { buildings: ['assembler'], recipes: ['tools'], resources: ['copper_ore', 'coal'], growMap: true },
+    unlocks: { resources: ['copper_ore', 'coal'], growMap: true },
   },
   {
-    key: 'tools', stage: 'Hamlet', title: 'Tools for every hand',
-    text: 'An assembler needs two inputs: bring iron plate and planks together.',
-    needs: [{ item: 'tools', count: 40 }],
-    unlocks: { recipes: ['charcoal', 'fasteners'] },
-  },
-  {
-    key: 'fasteners', stage: 'Hamlet', title: 'Workshops',
-    text: 'Coal and iron plate make fasteners. Timber also burns down to charcoal.',
-    needs: [{ item: 'fasteners', count: 60 }, { item: 'charcoal', count: 40 }],
-    unlocks: { recipes: ['copper_wire'] },
-  },
-  {
-    key: 'hamlet_done', stage: 'Hamlet', title: 'A thriving hamlet',
-    text: 'Keep everything the hamlet builds with arriving at this rate, together, for five minutes.',
+    key: 'village', stage: 'Hamlet', title: 'Become a village',
+    text: 'The hamlet now uses what the camp learned to make, so those lines have to keep running. Keep the three new goods arriving at this rate, together, for five minutes.',
     needs: [],
     rates: [{ item: 'tools', perMinute: 100 }, { item: 'fasteners', perMinute: 100 }, { item: 'copper_wire', perMinute: 100 }],
     holdSeconds: 300,
+    consumes: [{ item: 'planks', perMinute: 30 }, { item: 'bricks', perMinute: 30 }, { item: 'iron_plate', perMinute: 30 }],
     unlocks: {},
   },
 ];
 
 export const FINAL_STAGE = 'Village';
+
+/** What the town uses once the last gate is passed. */
+export const FINAL_CONSUMES: { item: string; perMinute: number }[] = [
+  { item: 'planks', perMinute: 30 }, { item: 'bricks', perMinute: 30 }, { item: 'iron_plate', perMinute: 30 },
+  { item: 'tools', perMinute: 30 }, { item: 'fasteners', perMinute: 30 }, { item: 'copper_wire', perMinute: 30 },
+];
+
+export interface TechDef {
+  id: number;
+  key: string;
+  name: string;
+  text: string;
+  /** The town stage it becomes available in: an index into GOALS. */
+  stage: number;
+  /** Other techs that must be bought first. */
+  requires: string[];
+  /** Taken from the hub's stock, once. It is not refunded. */
+  cost: { item: string; count: number }[];
+  unlocks: { buildings?: BuildingKey[]; recipes?: string[] };
+}
+
+// Things the town learns, bought from the hub's stock in whatever order the
+// player likes. Tech id 0 means "none". Ids are stable: they are written into
+// saves. Every cost is more than the starting stock holds of that item, so a
+// tech can only be bought by a factory that is already delivering it.
+export const TECHS: TechDef[] = [
+  {
+    id: 1, key: 'sawmill', name: 'Sawmill', text: 'A machine that cuts timber into planks.',
+    stage: 0, requires: [], cost: [{ item: 'timber', count: 80 }],
+    unlocks: { buildings: ['sawmill'], recipes: ['planks'] },
+  },
+  {
+    id: 2, key: 'kiln', name: 'Kiln', text: 'A machine that fires stone into bricks and iron ore into plate.',
+    stage: 0, requires: ['sawmill'], cost: [{ item: 'planks', count: 40 }, { item: 'stone', count: 40 }],
+    unlocks: { buildings: ['kiln'], recipes: ['bricks', 'iron_plate'] },
+  },
+  {
+    id: 3, key: 'splitter', name: 'Splitter', text: 'Shares one line between up to three, so one belt can feed several machines.',
+    stage: 0, requires: ['kiln'], cost: [{ item: 'bricks', count: 40 }, { item: 'iron_plate', count: 40 }],
+    unlocks: { buildings: ['splitter'] },
+  },
+  {
+    id: 4, key: 'assembler', name: 'Assembler', text: 'A machine that combines two inputs. It starts with tools, made from iron plate and planks.',
+    stage: 1, requires: [], cost: [{ item: 'bricks', count: 100 }, { item: 'iron_plate', count: 100 }, { item: 'planks', count: 60 }],
+    unlocks: { buildings: ['assembler'], recipes: ['tools'] },
+  },
+  {
+    id: 5, key: 'charcoal', name: 'Charcoal burning', text: 'A kiln recipe that burns timber down to charcoal.',
+    stage: 1, requires: [], cost: [{ item: 'planks', count: 80 }, { item: 'bricks', count: 40 }],
+    unlocks: { recipes: ['charcoal'] },
+  },
+  {
+    id: 6, key: 'fasteners', name: 'Fasteners', text: 'An assembler recipe: iron plate and coal make fasteners.',
+    stage: 1, requires: ['assembler'], cost: [{ item: 'tools', count: 60 }],
+    unlocks: { recipes: ['fasteners'] },
+  },
+  {
+    id: 7, key: 'copper_wire', name: 'Wire drawing', text: 'An assembler recipe: copper ore and charcoal make copper wire.',
+    stage: 1, requires: ['assembler', 'charcoal'], cost: [{ item: 'tools', count: 60 }, { item: 'charcoal', count: 60 }],
+    unlocks: { recipes: ['copper_wire'] },
+  },
+];
 
 // ---- lookups ---------------------------------------------------------------
 
@@ -214,6 +251,10 @@ for (const b of BUILDINGS) BUILDING_BY_ID[b.id] = b;
 export const RECIPE_BY_KEY = new Map(RECIPES.map((r) => [r.key, r]));
 export const RECIPE_BY_ID: (RecipeDef | undefined)[] = [];
 for (const r of RECIPES) RECIPE_BY_ID[r.id] = r;
+
+export const TECH_BY_KEY = new Map(TECHS.map((t) => [t.key, t]));
+export const TECH_BY_ID: (TechDef | undefined)[] = [];
+for (const t of TECHS) TECH_BY_ID[t.id] = t;
 
 export function itemId(key: string): number {
   const def = ITEM_BY_KEY.get(key);

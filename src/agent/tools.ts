@@ -7,7 +7,7 @@
 // agent loop, and directly by tests.
 
 import {
-  BUILDINGS, BUILDING_BY_ID, BUILDING_BY_KEY, GOALS, ITEMS, ITEM_BY_ID, ITEM_BY_KEY, MINER_SECONDS, RECIPES,
+  BUILDINGS, BUILDING_BY_ID, BUILDING_BY_KEY, GOALS, ITEMS, ITEM_BY_ID, ITEM_BY_KEY, MINER_SECONDS, RECIPES, TECHS, TECH_BY_KEY,
   RECIPE_BY_ID, RECIPE_BY_KEY, TICKS_PER_SECOND, BELT_SLOTS, buildingId, type BuildingDef, type BuildingKey,
 } from '../content/content';
 import {
@@ -61,7 +61,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: 'get_state',
     description:
-      'The whole situation in one read: game time, the current delivery list and progress, hub stock, what can be built and what it costs, unlocked recipes, every miner and machine with its status, and a list of detected problems. Call this when you need to re-orient; wait already reports progress and problems.',
+      'The whole situation in one read: game time, the current gate and its rates, what the town uses, what it can learn and what that costs, hub stock, what can be built and what it costs, unlocked recipes, every miner and machine with its status, and a list of detected problems. Call this when you need to re-orient; wait already reports progress and problems.',
     input_schema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
@@ -151,9 +151,20 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'research',
+    description:
+      'Buys something for the town to learn, paid once from the hub stock and not refunded. This is the only way to unlock new buildings and recipes. get_state lists what can be learned and what each costs.',
+    input_schema: {
+      type: 'object',
+      properties: { tech: { type: 'string', enum: TECHS.map((t) => t.key) } },
+      required: ['tech'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'wait',
     description:
-      `Lets the factory run. Game time only passes here: nothing is mined, moved or delivered between your other calls. Waits up to ${MAX_WAIT_SECONDS} seconds and returns early when the delivery list completes. Reports what reached the hub, progress on the list, and any problems.`,
+      `Lets the factory run. Game time only passes here: nothing is mined, moved or delivered between your other calls. Waits up to ${MAX_WAIT_SECONDS} seconds and returns early when the town passes a gate. Reports what reached the hub, the gate's rates, what can be learned, and any problems.`,
     input_schema: {
       type: 'object',
       properties: { seconds: { type: 'integer', minimum: 1, maximum: MAX_WAIT_SECONDS } },
@@ -212,7 +223,7 @@ function stockText(sim: Sim): string {
 
 function goalText(sim: Sim): string {
   const goal = GOALS[sim.goalIndex];
-  if (!goal) return 'Every delivery list is complete. The game is won.';
+  if (!goal) return 'The town has passed its last gate. The game is won.';
   const needs = goal.needs.map((n) => {
     const have = Math.min(sim.goalProgress[ITEM_BY_KEY.get(n.item)!.id], n.count);
     return `${n.item} ${have}/${n.count}${have >= n.count ? ' done' : ''}`;
@@ -223,10 +234,10 @@ function goalText(sim: Sim): string {
       return `${r.item} ${now}/${r.perMinute} per minute${now >= r.perMinute ? ' met' : ' SHORT'}`;
     });
     const hold = goal.holdSeconds ?? 0;
-    const state = sim.gateRatesMet()
-      ? 'every rate is met and the count is running'
-      : 'the count is paused until every rate is met at the same time';
-    return `Delivery list ${sim.goalIndex + 1} of ${GOALS.length}, "${goal.title}", is a RATE GATE. The hub must receive, over the last 60 seconds: ${rates.join(', ')}. All of them must hold together for ${hold}s; held so far ${Math.min(sim.gateHeld, hold)}s, ${state}. ${goal.text} Completing it unlocks: ${unlockText(sim.goalIndex)}.`;
+    const state = !sim.gateRatesMet()
+      ? 'the count is paused until every rate is met at the same time'
+      : sim.townIsShort() ? 'the count is paused because the hub has none of something the town uses' : 'every rate is met and the count is running';
+    return `Gate ${sim.goalIndex + 1} of ${GOALS.length}, "${goal.title}". The hub must receive, over the last 60 seconds: ${rates.join(', ')}. All of them must hold together for ${hold}s; held so far ${Math.min(sim.gateHeld, hold)}s, ${state}.${usesText(sim)} Passing it opens: ${unlockText(sim.goalIndex)}.\n${techText(sim)}`;
   }
   return `Delivery list ${sim.goalIndex + 1} of ${GOALS.length}, "${goal.title}": ${needs.join(', ')}. ${goal.text} Completing it unlocks: ${unlockText(sim.goalIndex)}.`;
 }
@@ -239,7 +250,8 @@ function unlockText(goalIndex: number): string {
   for (const r of u.recipes ?? []) parts.push(`${r} (recipe: ${recipeText(RECIPE_BY_KEY.get(r)!.id)}, made in a ${RECIPE_BY_KEY.get(r)!.building})`);
   for (const r of u.resources ?? []) parts.push(`${r} (deposits become usable)`);
   if (u.growMap) parts.push('more land around the map');
-  return parts.length ? parts.join('; ') : 'nothing new, it is the last list';
+  if (GOALS[goalIndex + 1]) parts.push('more for the town to learn');
+  return parts.length ? parts.join('; ') : 'nothing new, it is the last gate';
 }
 
 function nameOf(sim: Sim, slot: number): string {
@@ -820,6 +832,40 @@ async function remove(host: AgentHost, input: Record<string, unknown>): Promise<
   return `Removed ${[...removed].map(([name, n]) => `${n} ${name}`).join(', ')}. Stock: ${stockText(sim)}.`;
 }
 
+function research(host: AgentHost, input: Record<string, unknown>): string {
+  const sim = host.sim();
+  const tech = TECH_BY_KEY.get(String(input.tech));
+  if (!tech) throw new ToolError(`There is no tech called ${String(input.tech)}. ${techText(sim)}`);
+  const error = sim.techError(tech.id);
+  if (error) throw new ToolError(error);
+  sim.enqueue({ type: 'research', tech: tech.id });
+  sim.applyQueued();
+  const gained: string[] = [];
+  for (const b of tech.unlocks.buildings ?? []) gained.push(`${b} (building, costs ${costText(BUILDING_BY_KEY.get(b)!)})`);
+  for (const r of tech.unlocks.recipes ?? []) gained.push(`${r} (recipe: ${recipeText(RECIPE_BY_KEY.get(r)!.id)}, made in a ${RECIPE_BY_KEY.get(r)!.building})`);
+  return `The town learned ${tech.key}. Unlocked: ${gained.join('; ')}. Stock: ${stockText(sim)}.`;
+}
+
+/** What the town can learn now, and what is waiting on something else. */
+function techText(sim: Sim): string {
+  const open = TECHS.filter((t) => !sim.researched[t.id] && t.stage <= sim.goalIndex);
+  if (!open.length) return sim.goalIndex < GOALS.length ? 'Nothing more to learn until the town passes its gate.' : 'Nothing more to learn.';
+  const parts = open.map((t) => {
+    const needs = t.requires.filter((key) => !sim.researched[TECH_BY_KEY.get(key)!.id]);
+    const cost = t.cost.map((c) => `${c.count} ${c.item}`).join(' + ');
+    const state = needs.length ? `needs ${needs.join(' and ')} first` : sim.techError(t.id) === null ? 'CAN BUY NOW' : 'not enough stock yet';
+    return `${t.key} (costs ${cost}; ${state}): ${t.text}`;
+  });
+  return `The town can learn, with the research tool: ${parts.join(' | ')}`;
+}
+
+function usesText(sim: Sim): string {
+  const uses = sim.consumption();
+  if (!uses.length) return '';
+  const parts = uses.map((u) => `${u.item} ${u.perMinute}/min${sim.short[ITEM_BY_KEY.get(u.item)!.id] ? ' NONE LEFT' : ''}`);
+  return ` The town uses, out of the hub stock: ${parts.join(', ')}. A gate's count pauses while the hub has none of something the town uses.`;
+}
+
 async function wait(host: AgentHost, input: Record<string, unknown>, cancelled: () => boolean): Promise<string> {
   const seconds = Math.max(1, Math.min(MAX_WAIT_SECONDS, int(input.seconds, 'seconds')));
   let sim = host.sim();
@@ -836,7 +882,7 @@ async function wait(host: AgentHost, input: Record<string, unknown>, cancelled: 
   });
   lines.push(arrived.length ? `Delivered to the hub: ${arrived.join(', ')}.` : 'Nothing reached the hub.');
   for (let g = startGoal; g < sim.goalIndex; g++) {
-    lines.push(`DELIVERY LIST COMPLETE: "${GOALS[g].title}". Unlocked: ${unlockText(g)}.`);
+    lines.push(`GATE PASSED: "${GOALS[g].title}". Opened: ${unlockText(g)}.`);
   }
   lines.push(goalText(sim));
   lines.push(`Stock: ${stockText(sim)}.`);
@@ -861,6 +907,7 @@ export async function runTool(host: AgentHost, name: string, input: unknown, can
     case 'connect': return connect(host, args);
     case 'set_recipe': return setRecipe(host, args);
     case 'remove': return remove(host, args);
+    case 'research': return research(host, args);
     case 'wait': return wait(host, args, cancelled);
     default: throw new ToolError(`Unknown tool: ${name}.`);
   }

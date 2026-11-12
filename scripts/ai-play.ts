@@ -74,7 +74,7 @@ const result = await runAgent({
       case 'usage':
         if (sim.goalIndex !== goalSeen || event.usage.turns % 10 === 0) {
           goalSeen = sim.goalIndex;
-          console.log(`  [turn ${event.usage.turns}, list ${Math.min(sim.goalIndex + 1, GOALS.length)}/${GOALS.length}, game ${(sim.tick / TICKS_PER_SECOND / 60).toFixed(1)}m, ~$${event.usage.costUsd.toFixed(2)}]`);
+          console.log(`  [turn ${event.usage.turns}, gate ${Math.min(sim.goalIndex + 1, GOALS.length)}/${GOALS.length}, game ${(sim.tick / TICKS_PER_SECOND / 60).toFixed(1)}m, ~$${event.usage.costUsd.toFixed(2)}]`);
         }
         break;
     }
@@ -84,6 +84,6 @@ const result = await runAgent({
 writeFileSync(savePath, saveSim(sim));
 const u = result.usage;
 console.log(`\n${result.reason}: ${result.detail}`);
-console.log(`Delivery lists complete: ${sim.goalIndex} of ${GOALS.length}. Game time ${(sim.tick / TICKS_PER_SECOND / 60).toFixed(1)} minutes. Buildings: ${sim.count - sim.freeCount - 1}.`);
+console.log(`Gates passed: ${sim.goalIndex} of ${GOALS.length}. Game time ${(sim.tick / TICKS_PER_SECOND / 60).toFixed(1)} minutes. Buildings: ${sim.count - sim.freeCount - 1}.`);
 console.log(`Turns ${u.turns}. Tokens: ${u.inputTokens} in, ${u.outputTokens} out, ${u.cacheReadTokens} cache read, ${u.cacheWriteTokens} cache write. Estimated cost $${u.costUsd.toFixed(2)}.`);
 console.log(`Save: ${savePath}\nTranscript: ${transcript}`);

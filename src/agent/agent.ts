@@ -59,9 +59,9 @@ export interface AgentOptions {
 }
 
 const KICKOFF =
-  'Play Shiftworks. Work through the town\'s delivery lists until the last one is complete. Start by reading the state and looking at the map around the hub.';
+  'Play Shiftworks. Grow the town through its gates until the last one is passed. Start by reading the state and looking at the map around the hub.';
 const NUDGE =
-  'The game is not finished: there are delivery lists left. Keep playing with the tools. If you are stuck, call get_state and look at the problems it lists.';
+  'The game is not finished: the town has gates left to pass. Keep playing with the tools. If you are stuck, call get_state and look at the problems it lists.';
 
 function won(host: AgentHost): boolean {
   return host.sim().goalIndex >= GOALS.length;
@@ -77,7 +77,7 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
   const usage: AgentUsage = { turns: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 };
   const done = (reason: StopReason, detail: string): AgentResult => ({ reason, detail, usage });
 
-  if (won(host)) return done('won', 'Every delivery list was already complete.');
+  if (won(host)) return done('won', 'The town had already passed its last gate.');
 
   // The history is only ever appended to. Thinking blocks are tied to the
   // conversation they were produced in, so nothing earlier is edited or cut;
@@ -154,7 +154,7 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
 
     const calls = response.content.filter((b): b is Anthropic.Beta.BetaToolUseBlock => b.type === 'tool_use');
     if (calls.length === 0) {
-      if (won(host)) return done('won', 'Every delivery list is complete.');
+      if (won(host)) return done('won', 'The town passed its last gate.');
       if (++idleReplies > 3) return done('gave_up', 'The model stopped calling tools before the game was finished.');
       messages.push({ role: 'user', content: NUDGE });
       continue;
@@ -182,6 +182,6 @@ export async function runAgent(options: AgentOptions): Promise<AgentResult> {
       results.push({ type: 'tool_result', tool_use_id: call.id, content: result, is_error: failed });
     }
     messages.push({ role: 'user', content: results });
-    if (won(host)) return done('won', 'Every delivery list is complete.');
+    if (won(host)) return done('won', 'The town passed its last gate.');
   }
 }

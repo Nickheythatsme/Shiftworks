@@ -3,7 +3,7 @@
 // the interface a few times a second.
 
 import {
-  BUILDINGS, BUILDING_BY_ID, FINAL_STAGE, GOALS, ITEMS, ITEM_BY_ID, ITEM_BY_KEY, RECIPE_BY_ID, RECIPE_BY_KEY,
+  BUILDINGS, BUILDING_BY_ID, FINAL_STAGE, GOALS, ITEMS, ITEM_BY_ID, ITEM_BY_KEY, RECIPE_BY_ID, RECIPE_BY_KEY, TECHS, TECH_BY_ID, TECH_BY_KEY,
   TICKS_PER_SECOND, buildingId, type BuildingDef,
 } from './content/content';
 import { GameRenderer } from './render/renderer';
@@ -82,6 +82,17 @@ export interface UiState {
   needs: UiNeed[];
   /** Set while the current list is a gate: seconds held so far, seconds asked, and whether the count is moving. */
   gate: { held: number; hold: number; running: boolean } | null;
+  /** What the town takes from the hub's stock, and whether it just went without. */
+  uses: { name: string; color: string; perMinute: number; short: boolean }[];
+  /** Techs the town could learn at this stage and has not yet. */
+  techs: {
+    id: number;
+    name: string;
+    text: string;
+    cost: { name: string; color: string; count: number; enough: boolean }[];
+    /** Empty when it can be bought now; otherwise what it is waiting on. */
+    blocked: string;
+  }[];
   /** What the hub received over the last minute. */
   arriving: { name: string; color: string; perMinute: number }[];
   rewards: string[];
@@ -457,10 +468,13 @@ export class Game {
         this.won = true;
         continue;
       }
-      const goal = GOALS[event.index];
+      if (event.type === 'tech') {
+        this.toast(`The town learned: ${TECH_BY_ID[event.id]?.name}.`);
+        continue;
+      }
       const gained = this.rewardNames(event.index);
-      const verb = goal.rates ? 'supplied' : 'delivered';
-      this.toast(gained.length ? `${goal.title} ${verb}. Unlocked: ${gained.join(', ')}.` : `${goal.title} ${verb}.`);
+      const next = GOALS[event.index + 1]?.stage ?? FINAL_STAGE;
+      this.toast(gained.length ? `The town is now a ${next.toLowerCase()}. Opened: ${gained.join(', ')}.` : `The town is now a ${next.toLowerCase()}.`);
     }
     this.sim.events = [];
     this.sincePublish = 1;
@@ -488,6 +502,18 @@ export class Game {
     this.copyArea = null;
     if (tool.mode !== 'none') this.selected = null;
     this.publish();
+  }
+
+  /** Buys a tech from the hub's stock. */
+  research(id: number): void {
+    const error = this.sim.techError(id);
+    if (error) {
+      this.warn(error);
+      return;
+    }
+    this.sim.enqueue({ type: 'research', tech: id });
+    this.sim.applyQueued();
+    this.sincePublish = 1;
   }
 
   undo(): void {
@@ -931,12 +957,25 @@ export class Game {
       aiActive: this.aiActive,
       seconds: Math.floor(sim.tick / TICKS_PER_SECOND),
       stage: goal?.stage ?? FINAL_STAGE,
-      goalNumber: Math.min(sim.goalIndex + 1, GOALS.length),
+      goalNumber: sim.goalIndex + 1,
       goalCount: GOALS.length,
-      goalTitle: goal?.title ?? 'Every delivery made',
-      goalText: goal?.text ?? 'The hamlet has all it asked for. Keep building, or start a new map.',
+      goalTitle: goal?.title ?? 'A thriving village',
+      goalText: goal?.text ?? 'The town has grown as far as it can for now. Keep it supplied, keep building, or start a new map.',
       needs,
-      gate: goal?.rates ? { held: Math.min(sim.gateHeld, goal.holdSeconds ?? 0), hold: goal.holdSeconds ?? 0, running: sim.gateRatesMet() } : null,
+      gate: goal?.rates ? { held: Math.min(sim.gateHeld, goal.holdSeconds ?? 0), hold: goal.holdSeconds ?? 0, running: sim.gateRatesMet() && !sim.townIsShort() } : null,
+      uses: sim.consumption().map((u) => {
+        const item = ITEM_BY_KEY.get(u.item)!;
+        return { name: item.name, color: hex(item.color), perMinute: u.perMinute, short: sim.short[item.id] === 1 };
+      }),
+      techs: TECHS.filter((t) => !sim.researched[t.id] && t.stage <= sim.goalIndex).map((t) => {
+        const missing = t.requires.map((key) => TECH_BY_KEY.get(key)!).filter((r) => !sim.researched[r.id]);
+        const cost = t.cost.map((c) => {
+          const item = ITEM_BY_KEY.get(c.item)!;
+          return { name: item.name, color: hex(item.color), count: c.count, enough: sim.stock[item.id] >= c.count };
+        });
+        const blocked = missing.length ? `Needs ${missing.map((r) => r.name).join(' and ')}` : cost.every((c) => c.enough) ? '' : 'Not enough in the hub';
+        return { id: t.id, name: t.name, text: t.text, cost, blocked };
+      }),
       arriving: ITEMS.filter((i) => sim.rate[i.id] > 0).map((i) => ({ name: i.name, color: hex(i.color), perMinute: sim.rate[i.id] })),
       rewards: goal ? this.rewardNames(sim.goalIndex) : [],
       won: this.won,

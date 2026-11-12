@@ -5,7 +5,7 @@
 import { Sim } from './sim';
 import type { WorldType } from './world';
 
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
 const MAGIC = 0x54464853; // "SHFT", little-endian
 
 interface Header {
@@ -33,6 +33,9 @@ function townArrays(sim: Sim): { name: string; array: Uint8Array | Uint16Array |
     { name: 'goalProgress', array: sim.goalProgress, bytes: sim.goalProgress.byteLength },
     { name: 'rateBuckets', array: sim.rateBuckets, bytes: sim.rateBuckets.byteLength },
     { name: 'rate', array: sim.rate, bytes: sim.rate.byteLength },
+    { name: 'researched', array: sim.researched, bytes: sim.researched.byteLength },
+    { name: 'consumeDebt', array: sim.consumeDebt, bytes: sim.consumeDebt.byteLength },
+    { name: 'short', array: sim.short, bytes: sim.short.byteLength },
     { name: 'unlockedBuildings', array: sim.unlockedBuildings, bytes: sim.unlockedBuildings.byteLength },
     { name: 'unlockedRecipes', array: sim.unlockedRecipes, bytes: sim.unlockedRecipes.byteLength },
     { name: 'unlockedResources', array: sim.unlockedResources, bytes: sim.unlockedResources.byteLength },
