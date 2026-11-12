@@ -51,8 +51,10 @@ Then open http://localhost:5173.
 - Belts that point into the **town hub** deliver. Deliveries count toward the
   current list and also become building materials. Each delivery list unlocks
   the next building, recipe or resource.
-- Machines are tinted amber when they are waiting for inputs and red when
-  nothing in front of them takes their output.
+- Each machine has a status lamp: green when working, amber when waiting for
+  inputs, red when nothing in front of it takes its output, grey with no recipe.
+  A starved or blocked machine also takes on an amber or red wash and its
+  moving parts stop.
 
 The game saves itself every 30 seconds and picks up where you left off. The
 menu also has save, load, export to a file and import from a file.
@@ -70,7 +72,7 @@ npm run build
 | --- | --- |
 | `src/sim/` | The simulation: map, buildings, belts, machines, town, commands, save format. Imports nothing from the other folders |
 | `src/content/` | Items, recipes, buildings, delivery lists and balance numbers as data |
-| `src/render/` | Three.js scene, camera, procedural models, instanced buildings, belt items |
+| `src/render/` | Three.js scene, camera, procedural models, terrain, water, scenery, belt items. All motion runs in shaders |
 | `src/ui/` | React interface over the canvas |
 | `src/tools/` | Benchmark factory generator |
 | `src/game.ts` | Input to commands, the fixed-rate loop, the summary the interface reads |

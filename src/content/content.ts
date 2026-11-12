@@ -15,22 +15,24 @@ export interface ItemDef {
   color: number;
   /** Raw resources sit on deposits and are extracted by miners. */
   raw?: boolean;
+  /** How the item is drawn on a belt. */
+  shape: 'chunk' | 'log' | 'plank' | 'plate' | 'brick' | 'crate' | 'coil';
 }
 
 // Item id 0 means "nothing". Ids are stable: they are written into saves.
 export const ITEMS: ItemDef[] = [
-  { id: 1, key: 'timber', name: 'Timber', color: 0x8a5a2b, raw: true },
-  { id: 2, key: 'stone', name: 'Stone', color: 0x9aa0a6, raw: true },
-  { id: 3, key: 'iron_ore', name: 'Iron ore', color: 0x7b5c52, raw: true },
-  { id: 4, key: 'copper_ore', name: 'Copper ore', color: 0xc8703a, raw: true },
-  { id: 5, key: 'coal', name: 'Coal', color: 0x2c2c33, raw: true },
-  { id: 6, key: 'planks', name: 'Planks', color: 0xd9a55b },
-  { id: 7, key: 'bricks', name: 'Bricks', color: 0xb5543c },
-  { id: 8, key: 'iron_plate', name: 'Iron plate', color: 0xc9d1d9 },
-  { id: 9, key: 'charcoal', name: 'Charcoal', color: 0x4a4038 },
-  { id: 10, key: 'tools', name: 'Tools', color: 0x4f8fd6 },
-  { id: 11, key: 'fasteners', name: 'Fasteners', color: 0xe8d36b },
-  { id: 12, key: 'copper_wire', name: 'Copper wire', color: 0xf09a4a },
+  { id: 1, key: 'timber', name: 'Timber', color: 0x8a5a2b, shape: 'log', raw: true },
+  { id: 2, key: 'stone', name: 'Stone', color: 0x9aa0a6, shape: 'chunk', raw: true },
+  { id: 3, key: 'iron_ore', name: 'Iron ore', color: 0x7b5c52, shape: 'chunk', raw: true },
+  { id: 4, key: 'copper_ore', name: 'Copper ore', color: 0xc8703a, shape: 'chunk', raw: true },
+  { id: 5, key: 'coal', name: 'Coal', color: 0x2c2c33, shape: 'chunk', raw: true },
+  { id: 6, key: 'planks', name: 'Planks', color: 0xd9a55b, shape: 'plank' },
+  { id: 7, key: 'bricks', name: 'Bricks', color: 0xb5543c, shape: 'brick' },
+  { id: 8, key: 'iron_plate', name: 'Iron plate', color: 0xc9d1d9, shape: 'plate' },
+  { id: 9, key: 'charcoal', name: 'Charcoal', color: 0x4a4038, shape: 'chunk' },
+  { id: 10, key: 'tools', name: 'Tools', color: 0x4f8fd6, shape: 'crate' },
+  { id: 11, key: 'fasteners', name: 'Fasteners', color: 0xe8d36b, shape: 'crate' },
+  { id: 12, key: 'copper_wire', name: 'Copper wire', color: 0xf09a4a, shape: 'coil' },
 ];
 
 export const ITEM_COUNT = ITEMS.length + 1;
