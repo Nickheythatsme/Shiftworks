@@ -2,7 +2,9 @@
 // few times a second and never touches the simulation directly.
 
 import { useRef, useState, useSyncExternalStore } from 'react';
+import type { AiSession } from '../agent/session';
 import type { Game, UiState } from '../game';
+import { AiPanel } from './AiPanel';
 
 const ARROWS = ['→', '↓', '←', '↑'];
 const SPEEDS = [1, 2, 4];
@@ -76,8 +78,9 @@ function Selected({ game, state }: { game: Game; state: UiState }) {
   );
 }
 
-function TopRight({ game, state }: { game: Game; state: UiState }) {
+function TopRight({ game, state, ai }: { game: Game; state: UiState; ai: AiSession }) {
   const [menu, setMenu] = useState(false);
+  const [aiOpen, setAiOpen] = useState(() => new URLSearchParams(window.location.search).has('ai'));
   const [confirmNew, setConfirmNew] = useState(false);
   const [perf, setPerf] = useState(false);
   const file = useRef<HTMLInputElement>(null);
@@ -88,11 +91,14 @@ function TopRight({ game, state }: { game: Game; state: UiState }) {
         <button className={state.paused ? 'active' : ''} onClick={() => game.togglePause()} title="Pause (Space)">
           {state.paused ? 'Paused' : 'Pause'}
         </button>
-        {SPEEDS.map((s) => (
+        {!state.aiActive && SPEEDS.map((s) => (
           <button key={s} className={!state.paused && state.speed === s ? 'active' : ''} onClick={() => game.setSpeed(s)}>
             {s}x
           </button>
         ))}
+        <button className={aiOpen || state.aiActive ? 'active' : ''} onClick={() => setAiOpen(!aiOpen)} title="Let an AI play this map">
+          {state.aiActive ? 'AI playing' : 'AI plays'}
+        </button>
         <button className={menu ? 'active' : ''} onClick={() => { setMenu(!menu); setConfirmNew(false); }}>Menu</button>
       </section>
       {menu && (
@@ -120,6 +126,7 @@ function TopRight({ game, state }: { game: Game; state: UiState }) {
           <p className="muted small">The game saves itself every 30 seconds.</p>
         </section>
       )}
+      {aiOpen && <AiPanel session={ai} onClose={() => setAiOpen(false)} />}
       {perf && (
         <section className="panel perf">
           <span>{state.perf.fps.toFixed(0)} frames/s</span>
@@ -189,7 +196,7 @@ function BuildBar({ game, state }: { game: Game; state: UiState }) {
   );
 }
 
-export function App({ game }: { game: Game }) {
+export function App({ game, ai }: { game: Game; ai: AiSession }) {
   const state = useSyncExternalStore(game.subscribe, game.getState);
   if (!state.ready) return null;
   return (
@@ -198,7 +205,7 @@ export function App({ game }: { game: Game }) {
         <TownPanel state={state} />
         <Selected game={game} state={state} />
       </div>
-      <TopRight game={game} state={state} />
+      <TopRight game={game} state={state} ai={ai} />
       <div className="toasts">
         {state.toasts.map((t) => <div className="toast" key={t.id}>{t.text}</div>)}
       </div>

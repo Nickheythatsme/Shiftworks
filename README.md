@@ -57,10 +57,53 @@ Then open http://localhost:5173.
 The game saves itself every 30 seconds and picks up where you left off. The
 menu also has save, load, export to a file and import from a file.
 
+## AI plays
+
+An AI player can play the game for you. It works through the delivery lists
+with the same buildings, costs and rules you have, and it sees the game as
+text: it reads the state, looks at a character map, places buildings, routes
+belts and then waits to see what the factory delivers.
+
+It needs an Anthropic API key, read from `ANTHROPIC_API_KEY` or from a file at
+`~/shiftworks-api-key.txt` (set `SHIFTWORKS_API_KEY_FILE` to use another file).
+
+**In the game.** Run `npm run dev`, click **AI plays** at the top right, and
+press Start. The AI takes over the map you have open, wherever you have got to.
+Time stands still while it thinks and runs fast while it waits for the factory;
+the panel shows its reasoning, each action and what came back, and a running
+cost estimate. Stop hands the game back to you. The page talks to the dev
+server, which adds the key and forwards the request, so the key never reaches
+the browser. A built copy of the game has no such server and the panel says so.
+
+**From the command line.** This plays a fresh map with no window, as fast as
+the model answers:
+
+```bash
+npm run ai -- --seed 7 --max-cost 3
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--model` | `claude-opus-5-5` | Any Claude model id |
+| `--effort` | `medium` | How hard the model thinks: `low`, `medium`, `high`, `xhigh` |
+| `--seed` | `1` | Map seed |
+| `--max-cost` | `5` | Stop once the estimated spend passes this many dollars |
+| `--max-turns` | `400` | Stop after this many model calls |
+
+Each run writes two files to `ai-runs/`: the finished factory as a `.shft` save
+you can open with Menu, Import from file, and a transcript of everything the
+AI thought, did and was told.
+
+The AI's tools are `get_state`, `view_map`, `find_deposits`, `inspect`,
+`build`, `build_belt`, `connect` (routes a belt between two buildings),
+`set_recipe`, `remove` and `wait`. Game time only passes inside `wait`, so a
+slow model is not punished for thinking.
+
 ## Development
 
 ```bash
-npm test          # simulation tests, a full scripted playthrough, tick benchmark
+npm test          # simulation tests, a full scripted playthrough, AI tool tests, tick benchmark
+npm run ai        # an AI plays a headless game (uses the API, costs money)
 npm run bench     # tick benchmark only
 npm run typecheck
 npm run build
@@ -72,7 +115,9 @@ npm run build
 | `src/content/` | Items, recipes, buildings, delivery lists and balance numbers as data |
 | `src/render/` | Three.js scene, camera, procedural models, instanced buildings, belt items |
 | `src/ui/` | React interface over the canvas |
+| `src/agent/` | The AI player: its tools over the simulation, the model loop, the browser session |
 | `src/tools/` | Benchmark factory generator |
+| `scripts/` | Command-line AI runner and API key lookup |
 | `src/game.ts` | Input to commands, the fixed-rate loop, the summary the interface reads |
 | `tests/` | Headless Vitest suites |
 

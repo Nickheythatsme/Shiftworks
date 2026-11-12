@@ -82,3 +82,29 @@ button.active .short { color: #8a1c1c; }
 
 .win { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(8, 12, 18, 0.55); pointer-events: auto !important; }
 .win .panel { max-width: 420px; text-align: center; display: flex; flex-direction: column; gap: 12px; padding: 28px; }
+
+.ai { width: 380px; display: flex; flex-direction: column; gap: 8px; max-height: calc(100vh - 240px); }
+.ai header { display: flex; justify-content: space-between; align-items: baseline; }
+.ai-options { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; font-size: 12px; color: var(--muted); }
+.ai-options label { display: flex; flex-direction: column; gap: 2px; }
+.ai-options label.check { flex-direction: row; align-items: center; gap: 6px; align-self: end; padding-bottom: 5px; }
+select { font: inherit; color: var(--text); background: rgba(255, 255, 255, 0.07); border: 1px solid var(--line); border-radius: 7px; padding: 4px 6px; }
+select option { color: #1b1f24; }
+select:disabled, button:disabled { opacity: 0.55; cursor: default; }
+.ai .row { margin-top: 0; align-items: center; }
+.ai .row button { flex: none; }
+.ai-usage { font-variant-numeric: tabular-nums; }
+.ai-log { overflow-y: auto; min-height: 120px; display: flex; flex-direction: column; gap: 6px; padding-right: 4px; border-top: 1px solid var(--line); padding-top: 8px; }
+.ai-entry { font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+.ai-entry.say { white-space: pre-wrap; }
+.ai-entry.think { color: var(--muted); font-style: italic; white-space: pre-wrap; border-left: 2px solid var(--line); padding-left: 8px; }
+.ai-entry.note { color: var(--muted); font-size: 12px; }
+.ai-entry.end { border: 1px solid var(--ok); border-radius: 7px; padding: 6px 8px; }
+.ai-entry.end.bad { border-color: var(--bad); }
+.ai-call { display: flex; gap: 8px; align-items: baseline; width: 100%; text-align: left; background: none; border: none; padding: 0; opacity: 1 !important; }
+.ai-call:hover { background: none; }
+.ai-call code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--accent); }
+.ai-time { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+.ai-entry.tool pre { margin: 2px 0 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ai-entry.tool pre.open { white-space: pre; overflow-x: auto; text-overflow: clip; }
+.ai-entry.tool.bad pre { color: var(--bad); }

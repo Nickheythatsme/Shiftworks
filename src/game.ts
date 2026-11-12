@@ -12,8 +12,11 @@ import {
   Sim, loadSim, saveSim,
 } from './sim';
 import { readSave, writeSave } from './storage';
+import type { AgentHost } from './agent/tools';
 
 const MAX_TICKS_PER_FRAME = 8;
+/** While an AI player waits, time may run faster than a person would want to watch. */
+const MAX_AI_TICKS_PER_FRAME = 64;
 const AUTOSAVE_SECONDS = 30;
 const AUTOSAVE_KEY = 'autosave';
 const BELT = buildingId('belt');
@@ -31,6 +34,8 @@ export interface UiState {
   ready: boolean;
   speed: number;
   paused: boolean;
+  /** An AI player is in control of the clock. */
+  aiActive: boolean;
   seconds: number;
   stage: string;
   goalNumber: number;
@@ -88,6 +93,13 @@ export class Game {
   speed = 1;
   paused = false;
   private accumulator = 0;
+
+  // ---- AI player: it owns the clock while it plays. Time stands still while
+  // the model is deciding and runs fast while it waits on the factory. ----
+  aiActive = false;
+  private aiSpeed = 8;
+  private aiFollow = true;
+  private aiWait: { remaining: number; shouldStop: () => boolean; resolve: () => void } | null = null;
   private lastFrame = 0;
 
   tool: Tool = { mode: 'none' };
@@ -169,7 +181,10 @@ export class Game {
 
     // Commands apply even while paused, so you can build with time stopped.
     this.sim.applyQueued();
-    if (!this.paused) {
+    let running = !this.paused;
+    if (this.aiActive) {
+      running = this.stepForAgent(dt);
+    } else if (!this.paused) {
       this.accumulator += dt * TICKS_PER_SECOND * this.speed;
       // If ticks run long the game slows down instead of trying to catch up.
       if (this.accumulator > MAX_TICKS_PER_FRAME) this.accumulator = MAX_TICKS_PER_FRAME;
@@ -183,7 +198,7 @@ export class Game {
     this.drainEvents();
 
     this.updateGhost();
-    this.renderer.render(this.paused ? 0 : this.accumulator, dt);
+    this.renderer.render(running ? this.accumulator : 0, dt);
 
     this.frameMs += (performance.now() - frameStart - this.frameMs) * 0.05;
     if (dt > 0) this.fps += (1 / dt - this.fps) * 0.05;
@@ -199,6 +214,61 @@ export class Game {
       this.publish();
     }
     requestAnimationFrame((t) => this.frame(t));
+  }
+
+  /** Runs the ticks an AI player is waiting for. Returns whether time moved. */
+  private stepForAgent(dt: number): boolean {
+    const wait = this.aiWait;
+    if (!wait || this.paused) {
+      this.accumulator = 0;
+      return false;
+    }
+    this.accumulator = Math.min(MAX_AI_TICKS_PER_FRAME, this.accumulator + dt * TICKS_PER_SECOND * this.aiSpeed);
+    while (this.accumulator >= 1 && wait.remaining > 0 && !wait.shouldStop()) {
+      const start = performance.now();
+      this.sim.step();
+      this.tickMs += (performance.now() - start - this.tickMs) * 0.05;
+      this.accumulator -= 1;
+      wait.remaining--;
+    }
+    if (wait.remaining <= 0 || wait.shouldStop()) {
+      this.aiWait = null;
+      this.accumulator = 0;
+      wait.resolve();
+    }
+    return true;
+  }
+
+  /** The game as an AI player reaches it: the same simulation the person sees. */
+  agentHost(): AgentHost {
+    return {
+      sim: () => this.sim,
+      advance: (ticks, shouldStop) =>
+        new Promise<void>((resolve) => {
+          if (!this.aiActive || ticks <= 0) resolve();
+          else this.aiWait = { remaining: ticks, shouldStop, resolve };
+        }),
+      focus: (x, y) => {
+        if (this.aiFollow) this.renderer.rig.target.set(x + 0.5, 0, y + 0.5);
+      },
+    };
+  }
+
+  setAiActive(active: boolean): void {
+    this.aiActive = active;
+    this.accumulator = 0;
+    if (!active && this.aiWait) {
+      const wait = this.aiWait;
+      this.aiWait = null;
+      wait.resolve();
+    }
+    if (active) this.paused = false;
+    this.publish();
+  }
+
+  setAiOptions(speed: number, follow: boolean): void {
+    this.aiSpeed = speed;
+    this.aiFollow = follow;
   }
 
   private drainEvents(): void {
@@ -544,6 +614,7 @@ export class Game {
       ready,
       speed: this.speed,
       paused: this.paused,
+      aiActive: this.aiActive,
       seconds: Math.floor(sim.tick / TICKS_PER_SECOND),
       stage: goal?.stage ?? FINAL_STAGE,
       goalNumber: Math.min(sim.goalIndex + 1, GOALS.length),
