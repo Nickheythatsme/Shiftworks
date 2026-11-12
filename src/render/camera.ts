@@ -27,6 +27,11 @@ export class CameraRig {
     this.quarterTurns += direction;
   }
 
+  /** Quarter turns of the view, 0 to 3. Used to show directions as they appear on screen. */
+  get turns(): number {
+    return ((this.quarterTurns % 4) + 4) % 4;
+  }
+
   zoom(factor: number): void {
     this.goalDistance = THREE.MathUtils.clamp(this.goalDistance * factor, MIN_DISTANCE, MAX_DISTANCE);
   }

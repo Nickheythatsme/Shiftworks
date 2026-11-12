@@ -57,6 +57,17 @@ const ITEM_FRAGMENT = /* glsl */ `
   }
 `;
 
+/** A flat square the size of one chunk, with its corner at the origin. */
+function buildChunkQuad(): THREE.BufferGeometry {
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0, 0, 0, 0, 0, CHUNK, CHUNK, 0, 0, CHUNK, 0, CHUNK]), 3));
+  geometry.setAttribute('normal', new THREE.BufferAttribute(new Float32Array([0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0]), 3));
+  geometry.setAttribute('uv', new THREE.BufferAttribute(new Float32Array([0, 0, 0, 1, 1, 0, 1, 1]), 2));
+  geometry.setIndex([0, 1, 2, 2, 1, 3]);
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+
 export class GameRenderer {
   readonly rig = new CameraRig();
   private readonly renderer: THREE.WebGLRenderer;
@@ -68,7 +79,7 @@ export class GameRenderer {
   private readonly models = new Map<number, THREE.BufferGeometry>();
   private readonly batches = new Map<number, Batch>();
   private readonly chunkMeshes = new Map<Chunk, THREE.Mesh>();
-  private readonly terrainMaterial = new THREE.MeshLambertMaterial({ vertexColors: true });
+  private readonly chunkGeometry = buildChunkQuad();
   private trees: THREE.InstancedMesh | null = null;
   private rocks: THREE.InstancedMesh | null = null;
   private readonly treeGeometry = buildTreeGeometry();
@@ -167,7 +178,9 @@ export class GameRenderer {
     this.sim = sim;
     for (const mesh of this.chunkMeshes.values()) {
       this.scene.remove(mesh);
-      mesh.geometry.dispose();
+      const material = mesh.material as THREE.MeshLambertMaterial;
+      material.map?.dispose();
+      material.dispose();
     }
     this.chunkMeshes.clear();
     this.seenTopology = -1;
@@ -277,59 +290,55 @@ export class GameRenderer {
   private syncTerrain(): void {
     for (const chunk of this.sim.world.chunks) {
       if (this.chunkMeshes.has(chunk)) continue;
-      const mesh = new THREE.Mesh(this.buildChunkGeometry(chunk), this.terrainMaterial);
+      const material = new THREE.MeshLambertMaterial({ map: this.buildChunkTexture(chunk) });
+      const mesh = new THREE.Mesh(this.chunkGeometry, material);
+      mesh.position.set(chunk.cx << CHUNK_SHIFT, 0, chunk.cy << CHUNK_SHIFT);
       mesh.receiveShadow = true;
+      mesh.updateMatrix();
       mesh.matrixAutoUpdate = false;
       this.chunkMeshes.set(chunk, mesh);
       this.scene.add(mesh);
     }
   }
 
-  private buildChunkGeometry(chunk: Chunk): THREE.BufferGeometry {
-    const positions = new Float32Array(CHUNK * CHUNK * 18);
-    const colors = new Float32Array(CHUNK * CHUNK * 18);
-    const normals = new Float32Array(CHUNK * CHUNK * 18);
-    const color = new THREE.Color();
-    const deposit = new THREE.Color();
-    const x0 = chunk.cx << CHUNK_SHIFT;
-    const z0 = chunk.cy << CHUNK_SHIFT;
-    let p = 0;
-    for (let ty = 0; ty < CHUNK; ty++) {
-      for (let tx = 0; tx < CHUNK; tx++) {
-        const i = (ty << CHUNK_SHIFT) + tx;
-        const shade = chunk.shade[i] / 15;
-        let y = 0;
-        if (chunk.terrain[i] === TERRAIN_WATER) {
-          color.setHex(0x2f6f9f).multiplyScalar(0.85 + shade * 0.2);
-          y = -0.18;
-        } else {
-          color.setHex(0x6c9a52).multiplyScalar(0.86 + shade * 0.22);
-          if (chunk.deposit[i]) {
-            deposit.setHex(ITEM_BY_ID[chunk.deposit[i]]?.color ?? 0xffffff);
-            color.lerp(deposit, 0.55);
-          }
-        }
-        const xa = x0 + tx;
-        const za = z0 + ty;
-        const quad = [xa, za, xa, za + 1, xa + 1, za, xa + 1, za, xa, za + 1, xa + 1, za + 1];
-        for (let v = 0; v < 6; v++) {
-          positions[p] = quad[v * 2];
-          positions[p + 1] = y;
-          positions[p + 2] = quad[v * 2 + 1];
-          normals[p + 1] = 1;
-          colors[p] = color.r;
-          colors[p + 1] = color.g;
-          colors[p + 2] = color.b;
-          p += 3;
+  /** One texel per tile. A chunk is a single quad, so a huge map stays cheap. */
+  private buildChunkTexture(chunk: Chunk): THREE.DataTexture {
+    const data = new Uint8Array(CHUNK * CHUNK * 4);
+    for (let i = 0; i < CHUNK * CHUNK; i++) {
+      const shade = chunk.shade[i] / 15;
+      let r: number;
+      let g: number;
+      let b: number;
+      if (chunk.terrain[i] === TERRAIN_WATER) {
+        const k = 0.9 + shade * 0.14;
+        r = 0x33 * k;
+        g = 0x6e * k;
+        b = 0xa0 * k;
+      } else {
+        const k = 0.9 + shade * 0.16;
+        r = 0x70 * k;
+        g = 0x9c * k;
+        b = 0x58 * k;
+        const deposit = chunk.deposit[i];
+        if (deposit) {
+          const c = ITEM_BY_ID[deposit]?.color ?? 0xffffff;
+          r += (((c >> 16) & 255) - r) * 0.5;
+          g += (((c >> 8) & 255) - g) * 0.5;
+          b += ((c & 255) - b) * 0.5;
         }
       }
+      data[i * 4] = r;
+      data[i * 4 + 1] = g;
+      data[i * 4 + 2] = b;
+      data[i * 4 + 3] = 255;
     }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
-    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    geometry.computeBoundingSphere();
-    return geometry;
+    const texture = new THREE.DataTexture(data, CHUNK, CHUNK, THREE.RGBAFormat);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.magFilter = THREE.NearestFilter;
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    texture.generateMipmaps = true;
+    texture.needsUpdate = true;
+    return texture;
   }
 
   /** Trees and rocks on deposit tiles that have nothing built on them. */

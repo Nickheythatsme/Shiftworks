@@ -43,6 +43,7 @@ export interface UiState {
   stock: { name: string; color: string; count: number }[];
   buildBar: { id: number; name: string; color: string; hint: string; hotkey: string }[];
   tool: Tool;
+  /** The tool's facing as it appears on screen: 0 right, 1 down, 2 left, 3 up. */
   toolDir: number;
   hover: string;
   selected: null | {
@@ -57,7 +58,6 @@ export interface UiState {
   };
   toasts: { id: number; text: string }[];
   message: string;
-  saveNote: string;
   perf: { tickMs: number; frameMs: number; drawCalls: number; items: number; buildings: number; fps: number };
 }
 
@@ -93,7 +93,6 @@ export class Game {
   private toastId = 0;
   private message = '';
   private messageUntil = 0;
-  private saveNote = '';
   private won = false;
   private sinceAutosave = 0;
   private sincePublish = 1;
@@ -122,10 +121,10 @@ export class Game {
       const data = await readSave(AUTOSAVE_KEY);
       if (data) {
         this.useSim(loadSim(data));
-        this.saveNote = 'Continued from your last session.';
+        this.toast('Continued from your last session.');
       }
     } catch (error) {
-      this.saveNote = `Could not load the last session: ${(error as Error).message}`;
+      this.toast(`Could not load the last session: ${(error as Error).message}`);
     }
     this.lastFrame = performance.now();
     requestAnimationFrame((t) => this.frame(t));
@@ -310,7 +309,6 @@ export class Game {
   }
 
   private note(text: string): void {
-    this.saveNote = text;
     this.toast(text);
   }
 
@@ -550,12 +548,11 @@ export class Game {
       stock: ITEMS.filter((i) => sim.stock[i.id] > 0).map((i) => ({ name: i.name, color: hex(i.color), count: sim.stock[i.id] })),
       buildBar: this.buildable().map((b, i) => ({ id: b.id, name: b.name, color: hex(b.color), hint: b.hint, hotkey: String(i + 1) })),
       tool: this.tool,
-      toolDir: this.toolDir,
+      toolDir: (this.toolDir + this.renderer.rig.turns) & 3,
       hover: this.describeHover(),
       selected: this.describeSelected(),
       toasts: this.toasts.map((t) => ({ id: t.id, text: t.text })),
       message: this.message,
-      saveNote: this.saveNote,
       perf: {
         tickMs: this.tickMs,
         frameMs: this.frameMs,
