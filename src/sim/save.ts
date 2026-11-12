@@ -5,7 +5,7 @@
 import { Sim } from './sim';
 import type { WorldType } from './world';
 
-export const SAVE_VERSION = 2;
+export const SAVE_VERSION = 3;
 const MAGIC = 0x54464853; // "SHFT", little-endian
 
 interface Header {
@@ -19,16 +19,20 @@ interface Header {
   freeCount: number;
   goalIndex: number;
   totalMined: number;
+  rateCursor: number;
+  gateHeld: number;
   freeBuild: boolean;
   arrays: { name: string; bytes: number }[];
 }
 
-function townArrays(sim: Sim): { name: string; array: Uint8Array | Uint32Array | Int32Array; bytes: number }[] {
+function townArrays(sim: Sim): { name: string; array: Uint8Array | Uint16Array | Uint32Array | Int32Array; bytes: number }[] {
   return [
     { name: 'freeList', array: sim.freeList, bytes: sim.freeCount * 4 },
     { name: 'stock', array: sim.stock, bytes: sim.stock.byteLength },
     { name: 'delivered', array: sim.delivered, bytes: sim.delivered.byteLength },
     { name: 'goalProgress', array: sim.goalProgress, bytes: sim.goalProgress.byteLength },
+    { name: 'rateBuckets', array: sim.rateBuckets, bytes: sim.rateBuckets.byteLength },
+    { name: 'rate', array: sim.rate, bytes: sim.rate.byteLength },
     { name: 'unlockedBuildings', array: sim.unlockedBuildings, bytes: sim.unlockedBuildings.byteLength },
     { name: 'unlockedRecipes', array: sim.unlockedRecipes, bytes: sim.unlockedRecipes.byteLength },
     { name: 'unlockedResources', array: sim.unlockedResources, bytes: sim.unlockedResources.byteLength },
@@ -55,6 +59,8 @@ export function saveSim(sim: Sim): Uint8Array {
     freeCount: sim.freeCount,
     goalIndex: sim.goalIndex,
     totalMined: sim.totalMined,
+    rateCursor: sim.rateCursor,
+    gateHeld: sim.gateHeld,
     freeBuild: sim.options.freeBuild === true,
     arrays: parts.map((p) => ({ name: p.name, bytes: p.view.byteLength })),
   };
@@ -98,6 +104,8 @@ export function loadSim(data: Uint8Array): Sim {
   sim.freeCount = header.freeCount;
   sim.goalIndex = header.goalIndex;
   sim.totalMined = header.totalMined;
+  sim.rateCursor = header.rateCursor;
+  sim.gateHeld = header.gateHeld;
 
   const targets = new Map<string, ArrayBufferView>();
   for (const a of sim.buildingArrays()) targets.set(a.name, a.array);

@@ -5,8 +5,9 @@ move them on belts, turn them into parts, and deliver them to the town to
 unlock the next step.
 
 This build covers milestones 1 to 4 of the design: the map and camera, belts and
-miners, machines and recipes, and the town with unlocks and saves. The moving
-map (milestone 5) is not built yet.
+miners, machines and recipes, and the town with unlocks and saves. Phase 5, an
+economy that demands scale, has started with rate gates. The moving map
+(phase 6) is not built yet.
 
 ## Run it
 
@@ -51,6 +52,12 @@ Then open http://localhost:5173.
 - Belts that point into the **town hub** deliver. Deliveries count toward the
   current list and also become building materials. Each delivery list unlocks
   the next building, recipe or resource.
+- Two of the lists are **rate gates**: the town moves up a stage only once the
+  hub receives several goods at 100 a minute each, all at the same time, for
+  three or five minutes. The count pauses when a rate drops and never resets.
+  A gate cannot be passed by waiting, only by adding miners and machines. The
+  town panel shows each rate, the time held, and everything arriving at the
+  hub per minute.
 - **Blue means in, orange means out.** Every building has glowing blue arrows
   on the sides it takes items from and an orange arrow where it pushes them
   out. Larger floating arrows show the same thing on the building you are

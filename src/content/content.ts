@@ -108,6 +108,13 @@ export interface GoalDef {
   stage: string;
   text: string;
   needs: { item: string; count: number }[];
+  /**
+   * A gate: every one of these goods has to arrive at the hub at this rate, all
+   * at once, for `holdSeconds`. A gate cannot be passed by waiting.
+   */
+  rates?: { item: string; perMinute: number }[];
+  /** Seconds the rates must be held. The count pauses when a rate drops; it does not reset. */
+  holdSeconds?: number;
   unlocks: {
     buildings?: BuildingKey[];
     recipes?: string[];
@@ -133,8 +140,16 @@ export const STARTING_UNLOCKS = {
   resources: ['timber', 'stone', 'iron_ore'],
 };
 
+/** Deliveries are counted over this many seconds to give a rate per minute. */
+export const RATE_WINDOW_SECONDS = 60;
+
 // The town's delivery lists, in order. Finishing one unlocks the next step.
-// Tier 1 and the two-input half of tier 2 from the tech tree.
+// Tier 1 and the two-input half of tier 2 from the tech tree. A list with
+// `needs` asks for a one-off quantity and teaches a new product; a list with
+// `rates` is a tier gate that the town only passes once the factory is big
+// enough to keep those goods arriving. Gate rates sit a little under a whole
+// number of machines (100 a minute is three sawmills' 120, or four kilns' 120)
+// so that the right number of machines holds the rate without flickering.
 export const GOALS: GoalDef[] = [
   {
     key: 'first_timber', stage: 'Camp', title: 'Firewood for the camp',
@@ -156,8 +171,10 @@ export const GOALS: GoalDef[] = [
   },
   {
     key: 'hamlet', stage: 'Camp', title: 'Become a hamlet',
-    text: 'Supply all three camp goods at once. Splitters let one line feed several machines.',
-    needs: [{ item: 'planks', count: 60 }, { item: 'bricks', count: 60 }, { item: 'iron_plate', count: 60 }],
+    text: 'Keep all three camp goods arriving at this rate, together, for three minutes. One machine of each is not enough: add miners and machines, and use splitters to share a line between them.',
+    needs: [],
+    rates: [{ item: 'planks', perMinute: 100 }, { item: 'bricks', perMinute: 100 }, { item: 'iron_plate', perMinute: 100 }],
+    holdSeconds: 180,
     unlocks: { buildings: ['assembler'], recipes: ['tools'], resources: ['copper_ore', 'coal'], growMap: true },
   },
   {
@@ -174,8 +191,10 @@ export const GOALS: GoalDef[] = [
   },
   {
     key: 'hamlet_done', stage: 'Hamlet', title: 'A thriving hamlet',
-    text: 'Supply everything the hamlet builds with.',
-    needs: [{ item: 'tools', count: 80 }, { item: 'fasteners', count: 80 }, { item: 'copper_wire', count: 60 }],
+    text: 'Keep everything the hamlet builds with arriving at this rate, together, for five minutes.',
+    needs: [],
+    rates: [{ item: 'tools', perMinute: 100 }, { item: 'fasteners', perMinute: 100 }, { item: 'copper_wire', perMinute: 100 }],
+    holdSeconds: 300,
     unlocks: {},
   },
 ];

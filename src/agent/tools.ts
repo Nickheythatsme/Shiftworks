@@ -217,6 +217,17 @@ function goalText(sim: Sim): string {
     const have = Math.min(sim.goalProgress[ITEM_BY_KEY.get(n.item)!.id], n.count);
     return `${n.item} ${have}/${n.count}${have >= n.count ? ' done' : ''}`;
   });
+  if (goal.rates) {
+    const rates = goal.rates.map((r) => {
+      const now = sim.rate[ITEM_BY_KEY.get(r.item)!.id];
+      return `${r.item} ${now}/${r.perMinute} per minute${now >= r.perMinute ? ' met' : ' SHORT'}`;
+    });
+    const hold = goal.holdSeconds ?? 0;
+    const state = sim.gateRatesMet()
+      ? 'every rate is met and the count is running'
+      : 'the count is paused until every rate is met at the same time';
+    return `Delivery list ${sim.goalIndex + 1} of ${GOALS.length}, "${goal.title}", is a RATE GATE. The hub must receive, over the last 60 seconds: ${rates.join(', ')}. All of them must hold together for ${hold}s; held so far ${Math.min(sim.gateHeld, hold)}s, ${state}. ${goal.text} Completing it unlocks: ${unlockText(sim.goalIndex)}.`;
+  }
   return `Delivery list ${sim.goalIndex + 1} of ${GOALS.length}, "${goal.title}": ${needs.join(', ')}. ${goal.text} Completing it unlocks: ${unlockText(sim.goalIndex)}.`;
 }
 
