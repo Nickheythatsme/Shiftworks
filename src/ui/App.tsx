@@ -107,11 +107,11 @@ function Selected({ game, state }: { game: Game; state: UiState }) {
       {sel.detail.map((line) => <p className="muted" key={line}>{line}</p>)}
       {sel.recipes.length > 0 && (
         <div className="recipes">
-          <span className="muted">Recipe</span>
+          <span className="muted">{sel.choice}</span>
           {sel.recipes.map((r) => (
             <button key={r.id} className={r.id === sel.recipe ? 'active' : ''} onClick={() => game.setRecipe(r.id)}>
               <strong>{r.name}</strong>
-              <small>{r.text}</small>
+              {r.text && <small>{r.text}</small>}
             </button>
           ))}
         </div>

@@ -7,6 +7,9 @@ export const MINER = buildingId('miner');
 export const SAWMILL = buildingId('sawmill');
 export const KILN = buildingId('kiln');
 export const ASSEMBLER = buildingId('assembler');
+export const CRATE = buildingId('crate');
+export const BRIDGE = buildingId('bridge');
+export const FILTER = buildingId('filter');
 
 export const EAST = 0;
 export const SOUTH = 1;

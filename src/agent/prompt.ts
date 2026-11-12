@@ -25,6 +25,9 @@ Positions are [x, y] whole numbers relative to the hub centre. x grows east, y g
 - A miner or machine can push straight into a neighbouring belt, machine or hub tile: a belt between them is only needed to cover distance.
 - A splitter takes items from behind and shares them between its front, left and right.
 - Any belt, miner or machine that points into a hub tile delivers there.
+- A crate (once learned) stores up to 200 of one kind of item and pushes them out of its front. It takes items from any side.
+- A bridge (once learned) is built as two ends facing the same way with up to 4 tiles between them. Items go into the back of the first end and come out of the front of the second, passing over whatever is between. Use it where two lines have to cross.
+- A filter (once learned) takes items from behind and sends the one item chosen with set_filter out to its right; everything else goes straight on.
 - A machine only accepts the items its recipe uses. If a belt brings it anything else, that item sits at the end of the belt and jams the line behind it. Keep each belt to the items its destination can take; give a two-input machine a separate line for each input.
 - A machine holds a few items of each input and a few finished products. When whatever is ahead of it is full it stops until there is room, and belts back up behind a full machine. That is normal and clears itself.
 

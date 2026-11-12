@@ -3,12 +3,12 @@
 // the interface a few times a second.
 
 import {
-  BUILDINGS, BUILDING_BY_ID, FINAL_STAGE, GOALS, ITEMS, ITEM_BY_ID, ITEM_BY_KEY, RECIPE_BY_ID, RECIPE_BY_KEY, TECHS, TECH_BY_ID, TECH_BY_KEY,
+  BRIDGE_SPAN, BUILDINGS, BUILDING_BY_ID, CRATE_CAPACITY, FINAL_STAGE, GOALS, ITEMS, ITEM_BY_ID, ITEM_BY_KEY, RECIPES, RECIPE_BY_ID, RECIPE_BY_KEY, TECHS, TECH_BY_ID, TECH_BY_KEY,
   TICKS_PER_SECOND, buildingId, type BuildingDef,
 } from './content/content';
 import { GameRenderer } from './render/renderer';
 import {
-  DX, DY, HUB_X, HUB_Y, ROLE_HUB, ROLE_MACHINE, ROLE_MINER, STATUS_BLOCKED, STATUS_IDLE, STATUS_STARVED, STATUS_WORKING,
+  DX, DY, HUB_X, HUB_Y, ROLE_BRIDGE, ROLE_CRATE, ROLE_FILTER, ROLE_HUB, ROLE_MACHINE, ROLE_MINER, STATUS_BLOCKED, STATUS_IDLE, STATUS_STARVED, STATUS_WORKING,
   Sim, loadSim, saveSim,
 } from './sim';
 import { readSave, writeSave } from './storage';
@@ -124,6 +124,8 @@ export interface UiState {
     detail: string[];
     recipe: number;
     recipes: { id: number; name: string; text: string }[];
+    /** What the list of choices is: a machine's recipe, or the item a filter sends to its right. */
+    choice: 'Recipe' | 'Sends to its right';
   };
   toasts: { id: number; text: string }[];
   message: string;
@@ -543,7 +545,9 @@ export class Game {
 
   setRecipe(recipe: number): void {
     if (!this.selected) return;
-    this.history.do({ type: 'setRecipe', x: this.selected.x, y: this.selected.y, recipe });
+    const slot = this.sim.world.buildingAt(this.selected.x, this.selected.y);
+    if (slot >= 0 && this.sim.role(slot) === ROLE_FILTER) this.history.do({ type: 'setFilter', x: this.selected.x, y: this.selected.y, item: recipe });
+    else this.history.do({ type: 'setRecipe', x: this.selected.x, y: this.selected.y, recipe });
     this.sincePublish = 1;
   }
 
@@ -1062,9 +1066,32 @@ export class Game {
       status = 'Belts pointing into the hub deliver to the town';
       statusKind = 'ok';
     }
-    const recipes = role === ROLE_MACHINE
+    if (role === ROLE_CRATE) {
+      detail.push(sim.out[slot] ? `Holding ${sim.out[slot]} of ${CRATE_CAPACITY} ${ITEM_BY_ID[sim.aux[slot]]?.name.toLowerCase()}` : `Empty. Holds up to ${CRATE_CAPACITY} of one item`);
+    }
+    if (role === ROLE_BRIDGE) {
+      if (sim.isBridgeFarEnd(slot)) {
+        status = 'Far end: items arrive here and leave from the front';
+        statusKind = 'ok';
+      } else if (sim.bridgeFarEnd(slot) >= 0) {
+        status = 'Near end: items go in at the back and cross to the far end';
+        statusKind = 'ok';
+      } else {
+        status = `No far end yet. Place another bridge facing the same way, with up to ${BRIDGE_SPAN} tiles between`;
+        statusKind = 'warn';
+      }
+    }
+    let recipes = role === ROLE_MACHINE
       ? sim.recipesFor(sim.kind[slot]).map((id) => ({ id, name: RECIPE_BY_ID[id]?.name ?? '', text: recipeText(id) }))
       : [];
-    return { x: sel.x, y: sel.y, name: def.name, status, statusKind, detail, recipe: sim.recipe[slot], recipes };
+    if (role === ROLE_FILTER) {
+      // Anything the factory can have on a belt by now.
+      const known = ITEMS.filter((i) => (i.raw ? sim.unlockedResources[i.id] : RECIPES.some((r) => r.output.item === i.key && sim.unlockedRecipes[r.id])));
+      recipes = [{ id: 0, name: 'Nothing', text: 'Everything goes straight on' }, ...known.map((i) => ({ id: i.id, name: i.name, text: '' }))];
+    }
+    return {
+      x: sel.x, y: sel.y, name: def.name, status, statusKind, detail, recipe: sim.recipe[slot], recipes,
+      choice: role === ROLE_FILTER ? 'Sends to its right' : 'Recipe',
+    };
   }
 }

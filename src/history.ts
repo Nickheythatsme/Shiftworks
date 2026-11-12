@@ -127,6 +127,8 @@ export class History {
         const turn: Command = { type: 'rotate', x: command.x, y: command.y };
         return [turn, turn, turn];
       }
+      case 'setFilter':
+        return slot < 0 ? [] : [{ type: 'setFilter', x: command.x, y: command.y, item: sim.recipe[slot] }];
       case 'setRecipe':
         return slot < 0 ? [] : [{ type: 'setRecipe', x: command.x, y: command.y, recipe: sim.recipe[slot] }];
     }

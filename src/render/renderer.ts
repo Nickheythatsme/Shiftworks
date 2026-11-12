@@ -8,14 +8,14 @@ import {
   BELT_SLOTS, BUILDINGS, GOALS, ITEMS, ITEM_BY_ID, ITEM_COUNT, TICKS_PER_SECOND, buildingId, type BuildingKey,
 } from '../content/content';
 import {
-  CHUNK, CHUNK_SHIFT, DX, DY, HUB_X, HUB_Y, MAX_CHUNKS, MOVED_ENTERED, MOVED_SLOT, ROLE_BELT, ROLE_HUB, ROLE_MACHINE, ROLE_MINER,
+  CHUNK, CHUNK_SHIFT, DX, DY, HUB_X, HUB_Y, MAX_CHUNKS, MOVED_ENTERED, MOVED_SLOT, ROLE_BELT, ROLE_BRIDGE, ROLE_CRATE, ROLE_FILTER, ROLE_HUB, ROLE_MACHINE, ROLE_MINER,
   ROLE_SPLITTER, TERRAIN_WATER, type Chunk, type Sim,
 } from '../sim';
 import { hash3 } from '../sim/hash';
 import { CameraRig } from './camera';
 import {
   buildAssembler, buildBeltCurve, buildBeltStraight, buildBush, buildHub, buildItemShape, buildKiln, buildMiner,
-  buildPine, buildRock, buildRoundTree, buildSawmill, buildSplitter, buildStump, buildTuft, PORT_IN, PORT_OUT,
+  buildBridgeDeck, buildBridgeEnd, buildCrate, buildFilter, buildPine, buildRock, buildRoundTree, buildSawmill, buildSplitter, buildStump, buildTuft, PORT_IN, PORT_OUT,
   type ItemShape,
 } from './models';
 
@@ -437,6 +437,10 @@ export class GameRenderer {
     this.models.set('belt_r', buildBeltCurve(false));
     this.models.set('belt_l', buildBeltCurve(true));
     this.models.set('splitter', buildSplitter());
+    this.models.set('crate', buildCrate());
+    this.models.set('bridge', buildBridgeEnd());
+    this.models.set('bridge_deck', buildBridgeDeck());
+    this.models.set('filter', buildFilter());
     this.models.set('miner', buildMiner());
     this.models.set('sawmill', buildSawmill());
     this.models.set('kiln', buildKiln());
@@ -707,6 +711,21 @@ export class GameRenderer {
           add(d, false);
           add(right, false);
           add(left, false);
+          break;
+        case 'filter':
+          add(back, true);
+          add(d, false);
+          add(right, false);
+          break;
+        case 'bridge':
+          add(back, true);
+          add(d, false);
+          break;
+        case 'crate':
+          add(d, false);
+          add(back, true);
+          add(right, true);
+          add(left, true);
           break;
         case 'hub':
           for (let side = 0; side < 4; side++) for (const slide of [-1, 0, 1]) add(side, true, 1.8, slide);
@@ -1114,6 +1133,18 @@ export class GameRenderer {
       modelOf[s] = key;
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
+    // A paired bridge gets a piece of deck over every tile between its ends.
+    const decks: { x: number; y: number; dir: number }[] = [];
+    for (let s = 0; s < sim.count; s++) {
+      if (!sim.kind[s] || sim.role(s) !== ROLE_BRIDGE) continue;
+      const far = sim.bridgeFarEnd(s);
+      if (far < 0) continue;
+      const d = sim.dir[s];
+      for (let x = sim.bx[s] + DX[d], y = sim.by[s] + DY[d]; x !== sim.bx[far] || y !== sim.by[far]; x += DX[d], y += DY[d]) {
+        decks.push({ x, y, dir: d });
+      }
+    }
+    if (decks.length) counts.set('bridge_deck', decks.length);
 
     for (const batch of this.batches.values()) batch.count = 0;
     for (const [key, needed] of counts) {
@@ -1155,6 +1186,12 @@ export class GameRenderer {
       this.matrix.compose(this.position, this.quaternions[sim.role(s) === ROLE_HUB ? 0 : sim.dir[s]], this.unit);
       batch.mesh.setMatrixAt(i, this.matrix);
     }
+    const deckBatch = this.batches.get('bridge_deck');
+    for (const deck of decks) {
+      this.position.set(deck.x + 0.5, 0, deck.y + 0.5);
+      this.matrix.compose(this.position, this.quaternions[deck.dir], this.unit);
+      deckBatch!.mesh.setMatrixAt(deckBatch!.count++, this.matrix);
+    }
     for (const batch of this.batches.values()) {
       batch.mesh.count = batch.count;
       batch.mesh.instanceMatrix.needsUpdate = true;
@@ -1168,8 +1205,12 @@ export class GameRenderer {
     if (s < 0) return false;
     const role = sim.role(s);
     const d = sim.dir[s];
-    if (role === ROLE_BELT || role === ROLE_MINER || role === ROLE_MACHINE) {
+    if (role === ROLE_BELT || role === ROLE_MINER || role === ROLE_MACHINE || role === ROLE_CRATE || (role === ROLE_BRIDGE && sim.isBridgeFarEnd(s))) {
       return sim.bx[s] + DX[d] === tx && sim.by[s] + DY[d] === ty;
+    }
+    if (role === ROLE_FILTER) {
+      const r = (d + 1) & 3;
+      return (sim.bx[s] + DX[d] === tx && sim.by[s] + DY[d] === ty) || (sim.bx[s] + DX[r] === tx && sim.by[s] + DY[r] === ty);
     }
     if (role === ROLE_SPLITTER) {
       return !(sim.bx[s] - DX[d] === tx && sim.by[s] - DY[d] === ty);
@@ -1224,13 +1265,15 @@ export class GameRenderer {
 
     let total = 0;
     for (let s = 0; s < sim.count; s++) {
-      const role = sim.role(s);
-      if (role !== ROLE_BELT && role !== ROLE_SPLITTER) continue;
+      const kind = sim.role(s);
+      if (kind !== ROLE_BELT && kind !== ROLE_SPLITTER && kind !== ROLE_BRIDGE && kind !== ROLE_FILTER) continue;
+      // A bridge end carries items like a belt; a filter holds one like a splitter.
+      const role = kind === ROLE_BRIDGE ? ROLE_BELT : kind === ROLE_FILTER ? ROLE_SPLITTER : kind;
       const base = s * BELT_SLOTS;
       const cx = sim.bx[s] + 0.5;
       const cz = sim.by[s] + 0.5;
       const d = sim.dir[s];
-      const entry = role === ROLE_BELT ? this.beltEntry[s] : -1;
+      const entry = kind === ROLE_BELT ? this.beltEntry[s] : -1;
       const slotCount = role === ROLE_BELT ? BELT_SLOTS : 1;
       for (let k = 0; k < slotCount; k++) {
         const item = sim.slots[base + k];

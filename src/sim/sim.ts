@@ -7,6 +7,8 @@
 
 import {
   BELT_SLOTS,
+  BRIDGE_SPAN,
+  CRATE_CAPACITY,
   BELT_SLOT_SECONDS,
   BUILDINGS,
   BUILDING_BY_ID,
@@ -50,7 +52,18 @@ const ROLE_SPLITTER = 2;
 const ROLE_MINER = 3;
 const ROLE_MACHINE = 4;
 const ROLE_HUB = 5;
-const ROLE_CODE = { belt: ROLE_BELT, splitter: ROLE_SPLITTER, miner: ROLE_MINER, machine: ROLE_MACHINE, hub: ROLE_HUB };
+const ROLE_CRATE = 6;
+const ROLE_BRIDGE = 7;
+const ROLE_FILTER = 8;
+const ROLE_CODE = {
+  belt: ROLE_BELT, splitter: ROLE_SPLITTER, miner: ROLE_MINER, machine: ROLE_MACHINE, hub: ROLE_HUB,
+  crate: ROLE_CRATE, bridge: ROLE_BRIDGE, filter: ROLE_FILTER,
+};
+
+/** Roles that carry items in belt slots and take part in the belt step. */
+function carries(role: number): boolean {
+  return role === ROLE_BELT || role === ROLE_SPLITTER || role === ROLE_BRIDGE || role === ROLE_FILTER;
+}
 
 const INPUT_CAP = 4;
 const OUTPUT_CAP = 4;
@@ -74,6 +87,7 @@ export type Command =
   | { type: 'remove'; x: number; y: number }
   | { type: 'rotate'; x: number; y: number }
   | { type: 'setRecipe'; x: number; y: number; recipe: number }
+  | { type: 'setFilter'; x: number; y: number; item: number }
   | { type: 'research'; tech: number };
 
 export type SimEvent =
@@ -123,7 +137,7 @@ export class Sim {
   /** Goes up each time a slot is reused, so stale references can be caught. */
   gen = new Uint16Array(this.capacity);
   recipe = new Uint8Array(this.capacity);
-  /** Miners: the item id being extracted. Splitters: next output to try. */
+  /** Miners: the item id being extracted. Splitters: next output to try. Crates: the item stored. */
   aux = new Uint8Array(this.capacity);
   /** Work done on the current item, in ticks of full-speed work. */
   progress = new Int32Array(this.capacity);
@@ -167,6 +181,10 @@ export class Sim {
   private order = new Int32Array(this.capacity);
   private orderCount = 0;
   private orderState = new Uint8Array(this.capacity);
+  /** Bridges: the slot of the far end this one sends items to, or -1. */
+  private bridgeLink = new Int32Array(this.capacity).fill(-1);
+  /** Bridges: 1 if this is the far end of a pair, which only its near end may feed. */
+  private bridgeExit = new Uint8Array(this.capacity);
   private topologyDirty = true;
   /** Goes up whenever buildings change, so the renderer knows to redraw them. */
   topologyVersion = 0;
@@ -257,6 +275,7 @@ export class Sim {
     const role = this.role(slot);
     if (role === ROLE_MINER) return this.aux[slot];
     if (role === ROLE_MACHINE) return this.recipes[this.recipe[slot]]?.out ?? 0;
+    if (role === ROLE_CRATE) return this.aux[slot];
     return 0;
   }
 
@@ -406,6 +425,14 @@ export class Sim {
         this.changed();
         return true;
       }
+      case 'setFilter': {
+        const slot = this.world.buildingAt(command.x, command.y);
+        if (slot < 0 || this.role(slot) !== ROLE_FILTER) return false;
+        if (command.item < 0 || command.item >= ITEM_COUNT || this.recipe[slot] === command.item) return false;
+        // A filter keeps the item it sorts out where a machine keeps its recipe.
+        this.recipe[slot] = command.item;
+        return true;
+      }
       case 'research':
         return this.research(command.tech);
     }
@@ -498,10 +525,19 @@ export class Sim {
         this.out[slot] = Math.min(held.out, MINER_OUTPUT_CAP);
         this.progress[slot] = Math.max(0, Math.min(held.progress, this.minerTicks - 1));
         break;
+      case ROLE_CRATE:
+        if (held.aux > 0 && held.aux < ITEM_COUNT) {
+          this.aux[slot] = held.aux;
+          this.out[slot] = Math.min(held.out, CRATE_CAPACITY);
+        }
+        break;
       case ROLE_SPLITTER:
+      case ROLE_FILTER:
+      case ROLE_BRIDGE:
       case ROLE_BELT: {
-        // A splitter carries an item in its first slot, like a belt.
+        // Splitters and filters carry an item in their first slot, like a belt.
         if (this.role(slot) === ROLE_SPLITTER) this.aux[slot] = held.aux % 3;
+        if (this.role(slot) === ROLE_FILTER && held.recipe < ITEM_COUNT) this.recipe[slot] = held.recipe;
         const base = slot * BELT_SLOTS;
         for (let i = 0; i < BELT_SLOTS; i++) {
           const item = held.slots[i] ?? 0;
@@ -594,6 +630,8 @@ export class Sim {
     this.freeList = widen(this.freeList);
     this.order = new Int32Array(capacity);
     this.orderState = new Uint8Array(capacity);
+    this.bridgeLink = new Int32Array(capacity).fill(-1);
+    this.bridgeExit = new Uint8Array(capacity);
     this.capacity = capacity;
     this.topologyDirty = true;
   }
@@ -707,9 +745,22 @@ export class Sim {
         this.moved[base] = MOVED_ENTERED + sideToward(x, y, fromX, fromY);
         return true;
       }
+      case ROLE_CRATE:
+        if (this.out[t] === 0) {
+          this.aux[t] = item;
+          this.out[t] = 1;
+          return true;
+        }
+        if (item !== this.aux[t] || this.out[t] >= CRATE_CAPACITY) return false;
+        this.out[t]++;
+        return true;
+      case ROLE_BRIDGE:
+      case ROLE_FILTER:
       case ROLE_SPLITTER: {
+        // The far end of a bridge takes items only from its near end.
+        if (this.bridgeExit[t]) return false;
         const d = this.dir[t];
-        // A splitter only takes items from behind.
+        // These only take items from behind.
         if (this.bx[t] - DX[d] !== fromX || this.by[t] - DY[d] !== fromY) return false;
         const base = t * BELT_SLOTS;
         if (this.slots[base] !== 0) return false;
@@ -754,11 +805,16 @@ export class Sim {
       const x = this.bx[t];
       const y = this.by[t];
       this.work.transportUpdates++;
-      if (this.roleOf[this.kind[t]] === ROLE_BELT) {
+      const role = this.roleOf[this.kind[t]];
+      if (role === ROLE_BELT || role === ROLE_BRIDGE) {
         const last = base + BELT_SLOTS - 1;
         const lead = this.slots[last];
-        if (lead !== 0 && this.moved[last] === 0 && this.tryInsert(x + DX[d], y + DY[d], lead, x, y)) {
-          this.slots[last] = 0;
+        if (lead !== 0 && this.moved[last] === 0) {
+          // The near end of a bridge hands its items to the far end; everything else pushes ahead.
+          const passed = role === ROLE_BRIDGE && !this.bridgeExit[t]
+            ? this.sendAcross(t, lead)
+            : this.tryInsert(x + DX[d], y + DY[d], lead, x, y);
+          if (passed) this.slots[last] = 0;
         }
         for (let s = last - 1; s >= base; s--) {
           const item = this.slots[s];
@@ -768,6 +824,12 @@ export class Sim {
             this.slots[s] = 0;
           }
         }
+      } else if (role === ROLE_FILTER) {
+        const item = this.slots[base];
+        if (item === 0 || this.moved[base] !== 0) continue;
+        // The chosen item turns right; everything else goes straight on.
+        const od = item === this.recipe[t] ? (d + 1) & 3 : d;
+        if (this.tryInsert(x + DX[od], y + DY[od], item, x, y)) this.slots[base] = 0;
       } else {
         const item = this.slots[base];
         if (item === 0 || this.moved[base] !== 0) continue;
@@ -789,28 +851,99 @@ export class Sim {
    * Orders belts and splitters so that each comes after everything it feeds.
    * Starting points are taken in slot order, which decides where a loop is cut.
    */
+  /** Puts an item on the far end of a bridge, if this is a near end with a far end that has room. */
+  private sendAcross(t: number, item: number): boolean {
+    const far = this.bridgeLink[t];
+    if (far < 0) return false;
+    const base = far * BELT_SLOTS;
+    if (this.slots[base] !== 0) return false;
+    this.slots[base] = item;
+    this.moved[base] = MOVED_ENTERED + ((this.dir[far] + 2) & 3);
+    return true;
+  }
+
+  /** The far end a bridge sends to, or -1 if it has none or is a far end itself. */
+  bridgeFarEnd(slot: number): number {
+    if (this.topologyDirty) this.rebuildOrder();
+    return this.bridgeLink[slot];
+  }
+
+  /** Whether a bridge is the far end of a pair. */
+  isBridgeFarEnd(slot: number): boolean {
+    if (this.topologyDirty) this.rebuildOrder();
+    return this.bridgeExit[slot] === 1;
+  }
+
+  /** The nearest bridge behind this one that faces the same way and is close enough to pair with, or -1. */
+  private bridgeBehind(s: number): number {
+    const d = this.dir[s];
+    for (let k = 1; k <= BRIDGE_SPAN + 1; k++) {
+      const t = this.world.buildingAt(this.bx[s] - DX[d] * k, this.by[s] - DY[d] * k);
+      if (t >= 0 && this.roleOf[this.kind[t]] === ROLE_BRIDGE && this.dir[t] === d) return t;
+    }
+    return -1;
+  }
+
+  /**
+   * Pairs bridges up. Along a line of bridges facing the same way, the first is
+   * a near end, the next its far end, the one after a near end again, and so on.
+   */
+  private pairBridges(): void {
+    const state = this.orderState; // borrowed: 0 not worked out, 1 near end, 2 far end
+    state.fill(0, 0, this.count);
+    this.bridgeLink.fill(-1, 0, this.count);
+    this.bridgeExit.fill(0, 0, this.count);
+    const chain: number[] = [];
+    for (let start = 0; start < this.count; start++) {
+      if (this.roleOf[this.kind[start]] !== ROLE_BRIDGE || state[start] !== 0) continue;
+      // Walk back to a bridge that is already worked out or has none behind it.
+      let s = start;
+      while (s >= 0 && state[s] === 0) {
+        chain.push(s);
+        s = this.bridgeBehind(s);
+      }
+      let behind = s;
+      while (chain.length > 0) {
+        const b = chain.pop()!;
+        if (behind >= 0 && state[behind] === 1) {
+          state[b] = 2;
+          this.bridgeExit[b] = 1;
+          this.bridgeLink[behind] = b;
+        } else {
+          state[b] = 1;
+        }
+        behind = b;
+      }
+    }
+  }
+
   private rebuildOrder(): void {
     this.topologyDirty = false;
+    this.pairBridges();
     const state = this.orderState;
     state.fill(0, 0, this.count);
     this.orderCount = 0;
     const stack: number[] = [];
     for (let start = 0; start < this.count; start++) {
-      const startRole = this.roleOf[this.kind[start]];
-      if ((startRole !== ROLE_BELT && startRole !== ROLE_SPLITTER) || state[start] !== 0) continue;
+      if (!carries(this.roleOf[this.kind[start]]) || state[start] !== 0) continue;
       stack.push(start);
       while (stack.length > 0) {
         const t = stack[stack.length - 1];
         if (state[t] === 0) {
           state[t] = 1;
           const d = this.dir[t];
-          this.pushTransport(stack, state, this.bx[t] + DX[d], this.by[t] + DY[d]);
-          if (this.roleOf[this.kind[t]] === ROLE_SPLITTER) {
-            const r = (d + 1) & 3;
-            const l = (d + 3) & 3;
-            this.pushTransport(stack, state, this.bx[t] + DX[r], this.by[t] + DY[r]);
-            this.pushTransport(stack, state, this.bx[t] + DX[l], this.by[t] + DY[l]);
+          const role = this.roleOf[this.kind[t]];
+          if (role === ROLE_BRIDGE && !this.bridgeExit[t]) {
+            // A near end feeds its far end and nothing else.
+            const far = this.bridgeLink[t];
+            if (far >= 0 && state[far] === 0) stack.push(far);
+            continue;
           }
+          this.pushTransport(stack, state, this.bx[t] + DX[d], this.by[t] + DY[d]);
+          const r = (d + 1) & 3;
+          const l = (d + 3) & 3;
+          if (role === ROLE_SPLITTER || role === ROLE_FILTER) this.pushTransport(stack, state, this.bx[t] + DX[r], this.by[t] + DY[r]);
+          if (role === ROLE_SPLITTER) this.pushTransport(stack, state, this.bx[t] + DX[l], this.by[t] + DY[l]);
         } else {
           stack.pop();
           if (state[t] === 1) {
@@ -825,8 +958,7 @@ export class Sim {
   private pushTransport(stack: number[], state: Uint8Array, x: number, y: number): void {
     const t = this.world.buildingAt(x, y);
     if (t < 0 || state[t] !== 0) return;
-    const role = this.roleOf[this.kind[t]];
-    if (role === ROLE_BELT || role === ROLE_SPLITTER) stack.push(t);
+    if (carries(this.roleOf[this.kind[t]])) stack.push(t);
   }
 
   private loadGoalNeed(): void {
@@ -915,4 +1047,4 @@ function sideToward(x: number, y: number, nx: number, ny: number): number {
   return 3;
 }
 
-export { ROLE_NONE, ROLE_BELT, ROLE_SPLITTER, ROLE_MINER, ROLE_MACHINE, ROLE_HUB };
+export { ROLE_NONE, ROLE_BELT, ROLE_SPLITTER, ROLE_MINER, ROLE_MACHINE, ROLE_HUB, ROLE_CRATE, ROLE_BRIDGE, ROLE_FILTER };

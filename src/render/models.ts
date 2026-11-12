@@ -195,17 +195,76 @@ const BELT_DARK = 0x2b303b;
 const BELT_RAIL = 0x6c7689;
 const BELT_SURFACE = 0x474e5e;
 
-export function buildBeltStraight(): THREE.BufferGeometry {
+/** The pieces of a straight belt tile, for the belt itself and for buildings that sit on one. */
+function beltParts(): THREE.BufferGeometry[] {
   const surface = new THREE.BoxGeometry(1, 0.03, 0.7).translate(0, 0.115, 0);
   const s = part(surface, BELT_SURFACE, { mode: ANIM_BELT }, false);
   const position = s.getAttribute('position');
   const anim = s.getAttribute('aAnim') as THREE.BufferAttribute;
   for (let i = 0; i < position.count; i++) anim.setY(i, position.getX(i) + 0.5);
-  return merge([
+  return [
     box(1, 0.1, 0.8, 0, 0, 0, BELT_DARK),
     s,
     box(1, 0.1, 0.06, 0, 0.08, 0.39, BELT_RAIL),
     box(1, 0.1, 0.06, 0, 0.08, -0.39, BELT_RAIL),
+  ];
+}
+
+export function buildBeltStraight(): THREE.BufferGeometry {
+  return merge(beltParts());
+}
+
+const DECK = 0xa98558;
+const DECK_DARK = 0x6e5334;
+/** How high a bridge's deck sits: clear of a belt and its items, below the tall machines. */
+const DECK_Y = 0.62;
+
+/** One end of a bridge: a belt tile under a timber frame that the deck hangs from. */
+export function buildBridgeEnd(): THREE.BufferGeometry {
+  const post = (x: number, z: number) => box(0.09, DECK_Y + 0.14, 0.09, x, 0.1, z, DECK_DARK);
+  return merge([
+    ...beltParts(),
+    post(-0.3, 0.42), post(-0.3, -0.42), post(0.3, 0.42), post(0.3, -0.42),
+    box(0.72, 0.07, 0.94, 0, DECK_Y + 0.2, 0, DECK_DARK),
+    box(0.8, 0.06, 0.4, 0, DECK_Y, 0, DECK),
+    arrow(0.24, -0.34, DECK_Y + 0.28, 0, 0, PORT_IN, true),
+    arrow(0.24, 0.34, DECK_Y + 0.28, 0, 0, PORT_OUT, true),
+  ]);
+}
+
+/** The span of a bridge over one tile: a narrow raised deck, so what is underneath still shows. */
+export function buildBridgeDeck(): THREE.BufferGeometry {
+  return merge([
+    box(1, 0.06, 0.4, 0, DECK_Y, 0, DECK),
+    box(1, 0.07, 0.05, 0, DECK_Y + 0.06, 0.2, DECK_DARK),
+    box(1, 0.07, 0.05, 0, DECK_Y + 0.06, -0.2, DECK_DARK),
+  ]);
+}
+
+export function buildCrate(): THREE.BufferGeometry {
+  return merge([
+    box(0.92, 0.08, 0.92, 0, 0, 0, 0x5b4a36),
+    box(0.72, 0.5, 0.72, 0, 0.08, 0, 0xb98a4e),
+    box(0.76, 0.07, 0.76, 0, 0.18, 0, 0x8a6234),
+    box(0.76, 0.07, 0.76, 0, 0.4, 0, 0x8a6234),
+    box(0.78, 0.06, 0.78, 0, 0.58, 0, 0x9c7440),
+    box(0.3, 0.05, 0.3, 0, 0.64, 0, 0x6e4e2a),
+    ...intakes(['back', 'left', 'right']),
+    ...chute(),
+  ]);
+}
+
+/** A filter: a low base like the splitter's, with a sorting gate that swings to the right. */
+export function buildFilter(): THREE.BufferGeometry {
+  return merge([
+    box(0.94, 0.16, 0.94, 0, 0, 0, 0x2f5d55),
+    box(0.8, 0.14, 0.8, 0, 0.16, 0, 0x4c9a8a),
+    box(0.5, 0.2, 0.08, 0.08, 0.3, 0.12, 0xdfe6e9),
+    cyl(0.07, 0.07, 0.26, -0.2, 0.3, 0.12, 0x2b3a50, 6),
+    arrow(0.22, 0.36, 0.31, 0, 0, PORT_OUT, true),
+    arrow(0.22, 0, 0.31, 0.36, -Math.PI / 2, PORT_OUT, true),
+    box(0.1, 0.1, 0.5, -0.44, 0.12, 0, 0x1f4f73),
+    arrow(0.22, -0.36, 0.31, 0, 0, PORT_IN, true),
   ]);
 }
 

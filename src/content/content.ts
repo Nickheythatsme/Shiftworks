@@ -44,6 +44,9 @@ export type BuildingKey =
   | 'sawmill'
   | 'kiln'
   | 'assembler'
+  | 'crate'
+  | 'bridge'
+  | 'filter'
   | 'hub';
 
 export interface BuildingDef {
@@ -52,7 +55,7 @@ export interface BuildingDef {
   name: string;
   /** Footprint is size by size tiles. */
   size: number;
-  role: 'belt' | 'splitter' | 'miner' | 'machine' | 'hub';
+  role: 'belt' | 'splitter' | 'miner' | 'machine' | 'hub' | 'crate' | 'bridge' | 'filter';
   color: number;
   hint: string;
   /** Materials taken from the hub to build it, and returned when it is removed. */
@@ -73,6 +76,9 @@ export const BUILDINGS: BuildingDef[] = [
   { id: 4, key: 'sawmill', name: 'Sawmill', size: 1, role: 'machine', color: 0xa3be8c, hint: 'Cuts timber into planks.', cost: [{ item: 'timber', count: 10 }, { item: 'stone', count: 6 }] },
   { id: 5, key: 'kiln', name: 'Kiln', size: 1, role: 'machine', color: 0xbf616a, hint: 'Fires one input into one output. Pick the recipe.', cost: [{ item: 'stone', count: 10 }, { item: 'planks', count: 8 }] },
   { id: 2, key: 'splitter', name: 'Splitter', size: 1, role: 'splitter', color: 0x5e81ac, hint: 'Takes items from behind and shares them between front, left and right.', cost: [{ item: 'planks', count: 4 }, { item: 'iron_plate', count: 2 }] },
+  { id: 8, key: 'crate', name: 'Crate', size: 1, role: 'crate', color: 0xb98a4e, hint: 'Stores up to 200 of one item and passes them on out of its front. A buffer for when a line stops.', cost: [{ item: 'planks', count: 12 }] },
+  { id: 9, key: 'bridge', name: 'Bridge', size: 1, role: 'bridge', color: 0x8c6f4a, hint: 'Place two facing the same way, up to 4 tiles apart. Items go in the back of the first and come out of the second, over whatever is between.', cost: [{ item: 'planks', count: 6 }, { item: 'iron_plate', count: 2 }] },
+  { id: 10, key: 'filter', name: 'Filter', size: 1, role: 'filter', color: 0x4c9a8a, hint: 'Takes items from behind. The item you choose goes out to the right; everything else goes straight on.', cost: [{ item: 'planks', count: 4 }, { item: 'iron_plate', count: 4 }] },
   { id: 6, key: 'assembler', name: 'Assembler', size: 1, role: 'machine', color: 0xb48ead, hint: 'Combines two inputs into one part. Pick the recipe.', cost: [{ item: 'bricks', count: 12 }, { item: 'iron_plate', count: 12 }, { item: 'planks', count: 8 }] },
   { id: 7, key: 'hub', name: 'Town hub', size: 3, role: 'hub', color: 0xebcb8b, hint: 'Deliver goods here to grow the town.', cost: [], fixed: true },
 ];
@@ -200,6 +206,11 @@ export interface TechDef {
 // player likes. Tech id 0 means "none". Ids are stable: they are written into
 // saves. Every cost is more than the starting stock holds of that item, so a
 // tech can only be bought by a factory that is already delivering it.
+/** Most items a crate holds. */
+export const CRATE_CAPACITY = 200;
+/** Most tiles a bridge can pass over between its two ends. */
+export const BRIDGE_SPAN = 4;
+
 export const TECHS: TechDef[] = [
   {
     id: 1, key: 'sawmill', name: 'Sawmill', text: 'A machine that cuts timber into planks.',
@@ -215,6 +226,21 @@ export const TECHS: TechDef[] = [
     id: 3, key: 'splitter', name: 'Splitter', text: 'Shares one line between up to three, so one belt can feed several machines.',
     stage: 0, requires: ['kiln'], cost: [{ item: 'bricks', count: 40 }, { item: 'iron_plate', count: 40 }],
     unlocks: { buildings: ['splitter'] },
+  },
+  {
+    id: 8, key: 'crate', name: 'Storage', text: 'A crate that stores up to 200 of one item, to ride out a line that stops.',
+    stage: 0, requires: ['sawmill'], cost: [{ item: 'planks', count: 60 }],
+    unlocks: { buildings: ['crate'] },
+  },
+  {
+    id: 9, key: 'bridge', name: 'Bridges', text: 'A pair of bridge ends carries items over up to 4 tiles of anything, so lines can cross.',
+    stage: 0, requires: ['kiln'], cost: [{ item: 'planks', count: 60 }, { item: 'iron_plate', count: 30 }],
+    unlocks: { buildings: ['bridge'] },
+  },
+  {
+    id: 10, key: 'filter', name: 'Sorting', text: 'A filter that pulls one chosen item off a belt, so one belt can carry several goods.',
+    stage: 1, requires: [], cost: [{ item: 'iron_plate', count: 80 }, { item: 'bricks', count: 40 }],
+    unlocks: { buildings: ['filter'] },
   },
   {
     id: 4, key: 'assembler', name: 'Assembler', text: 'A machine that combines two inputs. It starts with tools, made from iron plate and planks.',
