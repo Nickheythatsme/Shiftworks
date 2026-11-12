@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GOALS, itemId, recipeId, buildingId } from '../src/content/content';
+import { GOALS, RATE_WINDOW_SECONDS, itemId, recipeId, buildingId } from '../src/content/content';
 import { HUB_X, HUB_Y, SAVE_VERSION, STATUS_BLOCKED, STATUS_STARVED, Sim, loadSim, saveSim } from '../src/sim';
 import { buildBenchFactory } from '../src/tools/benchFactory';
 import {
@@ -234,6 +234,68 @@ describe('machines', () => {
   });
 });
 
+/** Fills in everything the current list asks for, so the next town step completes it. */
+function passCurrentList(sim: Sim): void {
+  const goal = GOALS[sim.goalIndex];
+  for (const need of goal.needs) sim.goalProgress[itemId(need.item)] = need.count;
+  sim.gateHeld = goal.holdSeconds ?? 0;
+}
+
+/** Makes the hub look as if it had received `perSecond` of an item in each of the last 60 seconds. */
+function fakeRate(sim: Sim, item: number, perSecond: number): void {
+  sim.rateBuckets.fill(perSecond, item * RATE_WINDOW_SECONDS, (item + 1) * RATE_WINDOW_SECONDS);
+}
+
+describe('rate gates', () => {
+  const gate = GOALS.findIndex((g) => g.rates);
+
+  it('measures what the hub received over the last minute', () => {
+    const sim = testSim();
+    place(sim, MINER, TIMBER_X, ROW, SOUTH);
+    belts(sim, TIMBER_X, ROW + 1, SOUTH, 5);
+    belts(sim, TIMBER_X, ROW + 6, EAST, HUB_X - TIMBER_X);
+    belts(sim, HUB_X, ROW + 6, SOUTH, HUB_Y - 2 - (ROW + 6) + 1);
+    run(sim, 30 * 200);
+    // One miner extracts an item every 1.5 seconds.
+    expect(sim.rate[TIMBER]).toBe(40);
+    expect(sim.rate[itemId('stone')]).toBe(0);
+  });
+
+  it('cannot be passed by waiting with a factory that is too small', () => {
+    const sim = new Sim({ seed: 3, worldType: 'test' });
+    sim.goalIndex = gate;
+    // Every good arrives, but at half the rate the gate asks for.
+    for (let second = 0; second < 600; second++) {
+      for (const r of GOALS[gate].rates!) fakeRate(sim, itemId(r.item), 1);
+      run(sim, 30);
+    }
+    expect(sim.gateHeld).toBe(0);
+    expect(sim.goalIndex).toBe(gate);
+  });
+
+  it('counts only while every rate is met, pauses when one drops, and never resets', () => {
+    const sim = new Sim({ seed: 3, worldType: 'test' });
+    sim.goalIndex = gate;
+    const items = GOALS[gate].rates!.map((r) => itemId(r.item));
+    const hold = GOALS[gate].holdSeconds!;
+    const second = (rates: number[]) => {
+      items.forEach((item, i) => fakeRate(sim, item, rates[i]));
+      run(sim, 30);
+    };
+    for (let i = 0; i < 10; i++) second([2, 2, 2]);
+    expect(sim.gateHeld).toBe(10);
+    expect(sim.gateRatesMet()).toBe(true);
+    for (let i = 0; i < 20; i++) second([2, 2, 1]);
+    expect(sim.gateHeld).toBe(10);
+    expect(sim.gateRatesMet()).toBe(false);
+    for (let i = 0; i < hold - 11; i++) second([2, 2, 2]);
+    expect(sim.goalIndex).toBe(gate);
+    second([2, 2, 2]);
+    expect(sim.goalIndex).toBe(gate + 1);
+    expect(sim.gateHeld).toBe(0);
+  });
+});
+
 describe('the town', () => {
   it('completes a delivery list and unlocks the next step', () => {
     const sim = new Sim({ seed: 3, worldType: 'test', freeBuild: true });
@@ -255,7 +317,7 @@ describe('the town', () => {
     const radius = sim.world.radius;
     const hamlet = GOALS.findIndex((g) => g.unlocks.growMap);
     sim.goalIndex = hamlet;
-    for (const need of GOALS[hamlet].needs) sim.goalProgress[itemId(need.item)] = need.count;
+    passCurrentList(sim);
     run(sim, 31);
     expect(sim.world.radius).toBe(radius + 1);
     expect(sim.unlockedResources[itemId('coal')]).toBe(1);
@@ -273,7 +335,7 @@ describe('the town', () => {
   it('announces the win after the last list', () => {
     const sim = new Sim({ seed: 3, worldType: 'test' });
     for (let g = 0; g < GOALS.length; g++) {
-      for (const need of GOALS[g].needs) sim.goalProgress[itemId(need.item)] = need.count;
+      passCurrentList(sim);
       run(sim, 30);
     }
     expect(sim.goalIndex).toBe(GOALS.length);

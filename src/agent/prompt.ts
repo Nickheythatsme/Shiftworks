@@ -25,6 +25,9 @@ Every building is paid for from the hub's stock, and removing one refunds it in 
 
 A delivery only counts toward a list if it arrives while that list is the current one. Stock you already hold does not count, and progress starts from zero on each new list.
 
+# Rate gates
+Some lists are rate gates. A gate does not ask for a total: it asks that several goods all arrive at the hub at a given rate per minute, at the same time, for a set number of seconds. Rates are measured over the last 60 seconds. The count of seconds held pauses whenever any rate is short and resumes when all are met again; it never resets. Waiting does not pass a gate: only a factory with enough miners and machines does. Work out how many you need from the recipe times (a machine that takes 2s makes 30 a minute; a miner extracts 40 a minute), build that many, and check the rates that wait reports.
+
 # Time
 Game time passes only while you call wait. Building, looking and planning are free, so set things up, then wait, then look at what the wait reports. A wait returns early when a list completes. If a wait shows nothing arriving, find out why before waiting again.
 
@@ -32,7 +35,7 @@ Game time passes only while you call wait. Building, looking and planning are fr
 - Look before you build: find_deposits and view_map show where things are. Patches have ragged edges.
 - connect routes a belt for you between two buildings and is usually the easiest way to lay one. build_belt is there when you want a specific path.
 - After building, read the tool's reply: it says where the output goes and warns when it goes nowhere.
-- Several miners on one patch can merge onto one belt, and that is the cheapest way to speed a line up. One belt moves far more than one miner produces.
+- Several miners on one patch can merge onto one belt, and that is the cheapest way to speed a line up. One belt moves 360 items a minute, far more than one miner produces.
 - When a list completes, read what it unlocked before deciding what to build next.
 
 Keep going until the game is won. Do not stop to ask for confirmation: nobody is able to answer, and the next move is always yours.`;

@@ -53,6 +53,8 @@ export interface UiNeed {
   color: string;
   have: number;
   need: number;
+  /** The row is a rate per minute the hub must keep receiving, not a one-off count. */
+  perMinute?: boolean;
 }
 
 export interface UiState {
@@ -68,6 +70,10 @@ export interface UiState {
   goalTitle: string;
   goalText: string;
   needs: UiNeed[];
+  /** Set while the current list is a gate: seconds held so far, seconds asked, and whether the count is moving. */
+  gate: { held: number; hold: number; running: boolean } | null;
+  /** What the hub received over the last minute. */
+  arriving: { name: string; color: string; perMinute: number }[];
   rewards: string[];
   won: boolean;
   stock: { name: string; color: string; count: number }[];
@@ -430,7 +436,8 @@ export class Game {
       }
       const goal = GOALS[event.index];
       const gained = this.rewardNames(event.index);
-      this.toast(gained.length ? `${goal.title} delivered. Unlocked: ${gained.join(', ')}.` : `${goal.title} delivered.`);
+      const verb = goal.rates ? 'supplied' : 'delivered';
+      this.toast(gained.length ? `${goal.title} ${verb}. Unlocked: ${gained.join(', ')}.` : `${goal.title} ${verb}.`);
     }
     this.sim.events = [];
     this.sincePublish = 1;
@@ -771,6 +778,10 @@ export class Game {
       const item = ITEM_BY_KEY.get(n.item)!;
       return { name: item.name, color: hex(item.color), have: Math.min(sim.goalProgress[item.id], n.count), need: n.count };
     });
+    for (const r of goal?.rates ?? []) {
+      const item = ITEM_BY_KEY.get(r.item)!;
+      needs.push({ name: item.name, color: hex(item.color), have: sim.rate[item.id], need: r.perMinute, perMinute: true });
+    }
 
     return {
       ready,
@@ -784,6 +795,8 @@ export class Game {
       goalTitle: goal?.title ?? 'Every delivery made',
       goalText: goal?.text ?? 'The hamlet has all it asked for. Keep building, or start a new map.',
       needs,
+      gate: goal?.rates ? { held: Math.min(sim.gateHeld, goal.holdSeconds ?? 0), hold: goal.holdSeconds ?? 0, running: sim.gateRatesMet() } : null,
+      arriving: ITEMS.filter((i) => sim.rate[i.id] > 0).map((i) => ({ name: i.name, color: hex(i.color), perMinute: sim.rate[i.id] })),
       rewards: goal ? this.rewardNames(sim.goalIndex) : [],
       won: this.won,
       stock: ITEMS.filter((i) => sim.stock[i.id] > 0).map((i) => ({ name: i.name, color: hex(i.color), count: sim.stock[i.id] })),

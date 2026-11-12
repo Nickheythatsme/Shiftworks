@@ -14,6 +14,7 @@ import {
   ITEM_BY_ID,
   ITEM_COUNT,
   MINER_SECONDS,
+  RATE_WINDOW_SECONDS,
   RECIPES,
   STARTING_STOCK,
   STARTING_UNLOCKS,
@@ -128,6 +129,13 @@ export class Sim {
   unlockedRecipes = new Uint8Array(RECIPES.length + 1);
   unlockedResources = new Uint8Array(ITEM_COUNT);
   totalMined = 0;
+  /** Deliveries per item in each of the last 60 seconds. `rateCursor` is the second being filled. */
+  rateBuckets = new Uint16Array(ITEM_COUNT * RATE_WINDOW_SECONDS);
+  rateCursor = 0;
+  /** Deliveries per item over the last 60 full seconds: the rate per minute. Updated once a second. */
+  rate = new Uint32Array(ITEM_COUNT);
+  /** Seconds for which every rate of the current gate has been met. */
+  gateHeld = 0;
 
   // ---- derived, never saved ----
   private order = new Int32Array(this.capacity);
@@ -271,7 +279,7 @@ export class Sim {
   /** A number that is equal for two simulations exactly when their states match. */
   hash(): number {
     let h = FNV_OFFSET;
-    h = fnv1a(h, new Int32Array([this.tick, this.count, this.freeCount, this.goalIndex, this.world.radius, this.totalMined]));
+    h = fnv1a(h, new Int32Array([this.tick, this.count, this.freeCount, this.goalIndex, this.world.radius, this.totalMined, this.rateCursor, this.gateHeld]));
     for (const a of this.buildingArrays()) {
       if (a.name === 'moved' || a.name === 'gen') continue;
       h = fnv1a(h, a.array, this.count * a.per * a.array.BYTES_PER_ELEMENT);
@@ -280,6 +288,8 @@ export class Sim {
     h = fnv1a(h, this.stock);
     h = fnv1a(h, this.delivered);
     h = fnv1a(h, this.goalProgress);
+    h = fnv1a(h, this.rateBuckets);
+    h = fnv1a(h, this.rate);
     h = fnv1a(h, this.unlockedBuildings);
     h = fnv1a(h, this.unlockedRecipes);
     h = fnv1a(h, this.unlockedResources);
@@ -616,6 +626,7 @@ export class Sim {
         // toward the current list if the list asks for it.
         this.stock[item]++;
         this.delivered[item]++;
+        this.rateBuckets[item * RATE_WINDOW_SECONDS + this.rateCursor]++;
         if (this.goalNeed[item] !== 0) this.goalProgress[item]++;
         return true;
       default:
@@ -714,11 +725,38 @@ export class Sim {
     for (const need of GOALS[this.goalIndex]?.needs ?? []) this.goalNeed[itemId(need.item)] = need.count;
   }
 
+  /** Whether the hub is receiving every good of the current gate at the rate it asks. */
+  gateRatesMet(): boolean {
+    for (const r of GOALS[this.goalIndex]?.rates ?? []) {
+      if (this.rate[itemId(r.item)] < r.perMinute) return false;
+    }
+    return true;
+  }
+
+  /** Closes the second just ended: totals the last 60 and starts a fresh one. */
+  private updateRates(): void {
+    const buckets = this.rateBuckets;
+    for (let item = 1; item < ITEM_COUNT; item++) {
+      let sum = 0;
+      const base = item * RATE_WINDOW_SECONDS;
+      for (let i = 0; i < RATE_WINDOW_SECONDS; i++) sum += buckets[base + i];
+      this.rate[item] = sum;
+    }
+    this.rateCursor = (this.rateCursor + 1) % RATE_WINDOW_SECONDS;
+    for (let item = 1; item < ITEM_COUNT; item++) buckets[item * RATE_WINDOW_SECONDS + this.rateCursor] = 0;
+  }
+
   private updateTown(): void {
+    this.updateRates();
     const goal = GOALS[this.goalIndex];
     if (!goal) return;
     for (const need of goal.needs) {
       if (this.goalProgress[itemId(need.item)] < need.count) return;
+    }
+    if (goal.rates) {
+      // The count only moves while every rate is met. It never goes back.
+      if (this.gateRatesMet()) this.gateHeld++;
+      if (this.gateHeld < (goal.holdSeconds ?? 0)) return;
     }
     for (const key of goal.unlocks.buildings ?? []) this.unlockedBuildings[buildingId(key)] = 1;
     for (const key of goal.unlocks.recipes ?? []) this.unlockedRecipes[recipeId(key)] = 1;
@@ -726,6 +764,7 @@ export class Sim {
     if (goal.unlocks.growMap) this.world.growTo(this.world.radius + 1);
     this.events.push({ type: 'goal', index: this.goalIndex });
     this.goalIndex++;
+    this.gateHeld = 0;
     this.goalProgress.fill(0);
     this.loadGoalNeed();
     if (this.goalIndex === GOALS.length) this.events.push({ type: 'won' });

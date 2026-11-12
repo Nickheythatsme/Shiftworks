@@ -29,12 +29,29 @@ function TownPanel({ state }: { state: UiState }) {
         <div className="need" key={need.name}>
           <div className="need-row">
             <span><i className="swatch" style={{ background: need.color }} />{need.name}</span>
-            <span className={need.have >= need.need ? 'done' : ''}>{need.have} / {need.need}</span>
+            <span className={need.have >= need.need ? 'done' : ''}>{need.have} / {need.need}{need.perMinute ? ' a minute' : ''}</span>
           </div>
-          <div className="bar"><div style={{ width: `${(100 * need.have) / need.need}%`, background: need.color }} /></div>
+          <div className="bar"><div style={{ width: `${Math.min(100, (100 * need.have) / need.need)}%`, background: need.color }} /></div>
         </div>
       ))}
+      {state.gate && (
+        <div className="need gate">
+          <div className="need-row">
+            <span>{state.gate.running ? 'Holding' : state.gate.held > 0 ? 'Paused: a rate dropped' : 'Starts when every rate is met'}</span>
+            <span className={state.gate.running ? 'done' : ''}>{clock(state.gate.held)} / {clock(state.gate.hold)}</span>
+          </div>
+          <div className="bar"><div className={state.gate.running ? 'hold running' : 'hold'} style={{ width: `${(100 * state.gate.held) / state.gate.hold}%` }} /></div>
+        </div>
+      )}
       {state.rewards.length > 0 && <p className="reward">Unlocks: {state.rewards.join(', ')}</p>}
+      {state.arriving.length > 0 && (
+        <div className="stock">
+          <span className="muted">Arriving at the hub, per minute</span>
+          {state.arriving.map((a) => (
+            <span key={a.name} title={a.name}><i className="swatch" style={{ background: a.color }} />{a.name} {a.perMinute}</span>
+          ))}
+        </div>
+      )}
       <div className="stock">
         <span className="muted">Building materials in the hub</span>
         {state.stock.length === 0 && <span className="short">None. Deliver goods, or remove a building to get its materials back.</span>}
