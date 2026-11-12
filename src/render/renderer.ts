@@ -83,6 +83,9 @@ function buildFlowArrow(): THREE.BufferGeometry {
   return geometry;
 }
 
+/** A paste preview draws at most this many buildings; the paste itself places all of them. */
+const MAX_PASTE_GHOSTS = 600;
+
 export interface Ghost {
   building: number;
   x: number;
@@ -368,6 +371,12 @@ export class GameRenderer {
   private readonly ghostMaterial = new THREE.MeshBasicMaterial({ color: 0x7dffa0, transparent: true, opacity: 0.55, depthWrite: false });
   private readonly cursor: THREE.LineLoop;
   private readonly selection: THREE.LineLoop;
+  /** The rectangle being dragged out with the copy tool. */
+  private readonly area: THREE.LineLoop;
+  /** The buildings a paste would place, drawn from a pool that grows as needed. */
+  private readonly pasteGhosts: THREE.Mesh[] = [];
+  private readonly pasteOk = new THREE.MeshBasicMaterial({ color: 0x7dffa0, transparent: true, opacity: 0.55, depthWrite: false });
+  private readonly pasteBad = new THREE.MeshBasicMaterial({ color: 0xff5a5a, transparent: true, opacity: 0.55, depthWrite: false });
   // The AI player's hand: a tinted copy of the building it carries, a pointer
   // above it, an outline on the tile it is heading for, and rings where it drops.
   private readonly aiGhosts = new Map<number, THREE.Mesh>();
@@ -517,7 +526,8 @@ export class GameRenderer {
 
     this.cursor = this.makeOutline(0xffffff, 0.5);
     this.selection = this.makeOutline(0xffe08a, 0.56);
-    this.scene.add(this.cursor, this.selection);
+    this.area = this.makeOutline(0x8fd3ff, 0.5);
+    this.scene.add(this.cursor, this.selection, this.area);
 
     this.setSim(sim);
   }
@@ -570,6 +580,42 @@ export class GameRenderer {
     mesh.position.set(ghost.x + 0.5, 0.02, ghost.y + 0.5);
     mesh.quaternion.copy(this.quaternions[ghost.dir & 3]);
     this.ghostMaterial.color.setHex(ghost.ok ? 0x7dffa0 : 0xff5a5a);
+  }
+
+  /** Shows every building a paste would place. An empty list hides them. */
+  setPasteGhosts(ghosts: Ghost[]): void {
+    const count = Math.min(ghosts.length, MAX_PASTE_GHOSTS);
+    for (let i = 0; i < count; i++) {
+      const ghost = ghosts[i];
+      let mesh = this.pasteGhosts[i];
+      if (!mesh) {
+        mesh = new THREE.Mesh(undefined, this.pasteOk);
+        mesh.renderOrder = 2;
+        this.pasteGhosts[i] = mesh;
+        this.scene.add(mesh);
+      }
+      const model = this.ghostMeshes.get(ghost.building);
+      if (!model) {
+        mesh.visible = false;
+        continue;
+      }
+      mesh.geometry = model.geometry;
+      mesh.material = ghost.ok ? this.pasteOk : this.pasteBad;
+      mesh.position.set(ghost.x + 0.5, 0.02, ghost.y + 0.5);
+      mesh.quaternion.copy(this.quaternions[ghost.dir & 3]);
+      mesh.visible = true;
+    }
+    for (let i = count; i < this.pasteGhosts.length; i++) this.pasteGhosts[i].visible = false;
+  }
+
+  /** Outlines a rectangle of tiles, corners included, or hides it with null. */
+  setArea(area: { x0: number; y0: number; x1: number; y1: number } | null): void {
+    this.area.visible = area !== null;
+    if (!area) return;
+    const w = area.x1 - area.x0 + 1;
+    const h = area.y1 - area.y0 + 1;
+    this.area.position.set(area.x0 + w / 2, 0, area.y0 + h / 2);
+    this.area.scale.set(w, 1, h);
   }
 
   /** Shows the AI player's hand, or hides it with null. */

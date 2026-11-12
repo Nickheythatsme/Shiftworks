@@ -6,7 +6,7 @@ unlock the next step.
 
 This build covers milestones 1 to 4 of the design: the map and camera, belts and
 miners, machines and recipes, and the town with unlocks and saves. Phase 5, an
-economy that demands scale, has started with rate gates. The moving map
+economy that demands scale, has rate gates, copy and paste, and undo. The moving map
 (phase 6) is not built yet.
 
 ## Run it
@@ -30,7 +30,10 @@ Then open http://localhost:5173.
 | Turn the building you are placing | R (Shift+R the other way) |
 | Turn a placed building | Hover it and press R with no tool selected |
 | Remove | Right click or drag, or X for the remove tool |
-| Copy the building under the cursor | F |
+| Pick up the building under the cursor as the tool | F |
+| Copy an area | C, then drag over the buildings. Recipes are copied too |
+| Paste | Click, as many times as you like. V brings the last copy back; R turns it |
+| Undo, redo | Z and Shift+Z, or Ctrl/Cmd+Z and Shift+Ctrl/Cmd+Z |
 | Inspect a building, choose a recipe | Left click it with no tool selected |
 | Cancel | Esc |
 | Pause | Space. You can build while paused |
@@ -66,6 +69,10 @@ Then open http://localhost:5173.
   inputs, red when nothing in front of it takes its output, grey with no recipe.
   A starved or blocked machine also takes on an amber or red wash and its
   moving parts stop.
+
+One drag of belt or one paste is a single undo step. Undoing a removal puts
+the building back with whatever it was holding. Undo covers what you did since
+the map was loaded, and is cleared when the AI player takes over.
 
 The game saves itself every 30 seconds and picks up where you left off. The
 menu also has save, load, export to a file and import from a file.

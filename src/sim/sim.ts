@@ -51,8 +51,21 @@ const INPUT_CAP = 4;
 const OUTPUT_CAP = 4;
 const MINER_OUTPUT_CAP = 2;
 
+/** What a building has inside it, so that undoing a removal can put it back. */
+export interface Held {
+  recipe: number;
+  aux: number;
+  progress: number;
+  working: number;
+  inA: number;
+  inB: number;
+  out: number;
+  /** Belt and splitter item slots. */
+  slots: number[];
+}
+
 export type Command =
-  | { type: 'place'; building: number; x: number; y: number; dir: number }
+  | { type: 'place'; building: number; x: number; y: number; dir: number; held?: Held }
   | { type: 'remove'; x: number; y: number }
   | { type: 'rotate'; x: number; y: number }
   | { type: 'setRecipe'; x: number; y: number; recipe: number };
@@ -348,7 +361,7 @@ export class Sim {
   private apply(command: Command): boolean {
     switch (command.type) {
       case 'place':
-        return this.place(command.building, command.x, command.y, command.dir & 3);
+        return this.place(command.building, command.x, command.y, command.dir & 3, command.held);
       case 'remove':
         return this.remove(command.x, command.y);
       case 'rotate': {
@@ -379,7 +392,7 @@ export class Sim {
     }
   }
 
-  private place(building: number, x: number, y: number, dir: number): boolean {
+  private place(building: number, x: number, y: number, dir: number, held?: Held): boolean {
     if (this.placeError(building, x, y) !== null) return false;
     const def = BUILDING_BY_ID[building]!;
     const there = this.world.buildingAt(x, y);
@@ -398,9 +411,59 @@ export class Sim {
     this.dir[slot] = dir;
     if (def.role === 'miner') this.aux[slot] = this.world.depositAt(x, y);
     if (def.role === 'machine') this.recipe[slot] = this.recipesFor(building)[0] ?? 0;
+    if (held) this.restore(slot, held);
     this.occupy(slot, slot);
     this.changed();
     return true;
+  }
+
+  /** A copy of what the building in `slot` is holding. */
+  heldBy(slot: number): Held {
+    const base = slot * BELT_SLOTS;
+    return {
+      recipe: this.recipe[slot],
+      aux: this.aux[slot],
+      progress: this.progress[slot],
+      working: this.working[slot],
+      inA: this.inA[slot],
+      inB: this.inB[slot],
+      out: this.out[slot],
+      slots: Array.from(this.slots.subarray(base, base + BELT_SLOTS)),
+    };
+  }
+
+  /** Puts back what a building held. Anything that does not fit the building is left out. */
+  private restore(slot: number, held: Held): void {
+    switch (this.role(slot)) {
+      case ROLE_MACHINE: {
+        const r = this.recipes[held.recipe];
+        if (!r || r.building !== this.kind[slot] || !this.unlockedRecipes[held.recipe]) return;
+        this.recipe[slot] = held.recipe;
+        this.inA[slot] = Math.min(held.inA, INPUT_CAP);
+        this.inB[slot] = Math.min(held.inB, INPUT_CAP);
+        this.out[slot] = Math.min(held.out, OUTPUT_CAP);
+        if (held.working) {
+          this.working[slot] = 1;
+          this.progress[slot] = Math.max(0, Math.min(held.progress, r.ticks - 1));
+        }
+        break;
+      }
+      case ROLE_MINER:
+        this.out[slot] = Math.min(held.out, MINER_OUTPUT_CAP);
+        this.progress[slot] = Math.max(0, Math.min(held.progress, this.minerTicks - 1));
+        break;
+      case ROLE_SPLITTER:
+      case ROLE_BELT: {
+        // A splitter carries an item in its first slot, like a belt.
+        if (this.role(slot) === ROLE_SPLITTER) this.aux[slot] = held.aux % 3;
+        const base = slot * BELT_SLOTS;
+        for (let i = 0; i < BELT_SLOTS; i++) {
+          const item = held.slots[i] ?? 0;
+          if (item > 0 && item < ITEM_COUNT) this.slots[base + i] = item;
+        }
+        break;
+      }
+    }
   }
 
   private remove(x: number, y: number): boolean {
