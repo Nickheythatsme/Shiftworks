@@ -40,3 +40,31 @@ export function tideInfo(tick: number): TideInfo {
   const rising = phase < HALF;
   return { level: tideLevel(tick), rising, ticksToTurn: rising ? HALF - phase : TIDE_CYCLE_TICKS - phase };
 }
+
+export interface Flooding {
+  /** 'dry' never floods, 'water' is always under water, 'tidal' is covered for part of every cycle. */
+  kind: 'dry' | 'water' | 'tidal';
+  wet: boolean;
+  /** Ticks until the water arrives if the ground is dry now, or leaves if it is wet. 0 unless tidal. */
+  ticksToChange: number;
+  /** Ticks under water in each cycle. */
+  wetTicks: number;
+}
+
+/**
+ * What the tide does to ground of a given height, seen from a given tick. This
+ * is the same rule the simulation applies, turned round to give a time, so it
+ * is always right about what will happen.
+ */
+export function flooding(height: number, tick: number): Flooding {
+  if (height < TIDE_LOW) return { kind: 'water', wet: true, ticksToChange: 0, wetTicks: TIDE_CYCLE_TICKS };
+  if (height >= TIDE_HIGH) return { kind: 'dry', wet: false, ticksToChange: 0, wetTicks: 0 };
+  // The ground is wet while the water level is above it, which is while the
+  // tide is at least `first` ticks into its climb, on the way up or the way down.
+  const first = Math.ceil(((height + 1 - TIDE_LOW) * (HALF + 1)) / STEPS);
+  const last = TIDE_CYCLE_TICKS - first;
+  const phase = tick % TIDE_CYCLE_TICKS;
+  const wet = phase >= first && phase <= last;
+  const ticksToChange = wet ? last + 1 - phase : phase < first ? first - phase : TIDE_CYCLE_TICKS - phase + first;
+  return { kind: 'tidal', wet, ticksToChange, wetTicks: last - first + 1 };
+}

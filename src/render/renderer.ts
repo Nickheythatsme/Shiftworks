@@ -5,11 +5,11 @@
 
 import * as THREE from 'three';
 import {
-  BELT_SLOTS, BUILDINGS, GOALS, TIDE_HIGH, TIDE_LOW, ITEMS, ITEM_BY_ID, ITEM_COUNT, TICKS_PER_SECOND, buildingId, type BuildingKey,
+  BELT_SLOTS, BUILDINGS, GOALS, TIDE_CYCLE_SECONDS, TIDE_HIGH, TIDE_LOW, ITEMS, ITEM_BY_ID, ITEM_COUNT, TICKS_PER_SECOND, buildingId, type BuildingKey,
 } from '../content/content';
 import {
   CHUNK, CHUNK_SHIFT, DX, DY, HUB_X, HUB_Y, MAX_CHUNKS, MOVED_ENTERED, MOVED_SLOT, ROLE_BELT, ROLE_BRIDGE, ROLE_CRATE, ROLE_FILTER, ROLE_HUB, ROLE_MACHINE, ROLE_MINER,
-  ROLE_SPLITTER, tideSmooth, type Chunk, type Sim,
+  ROLE_SPLITTER, STATUS_DORMANT, tideInfo, tideSmooth, type Chunk, type Sim,
 } from '../sim';
 import { hash3 } from '../sim/hash';
 import { CameraRig } from './camera';
@@ -94,6 +94,8 @@ export interface Ghost {
   y: number;
   dir: number;
   ok: boolean;
+  /** It can be built, but the tide will cover it. */
+  warn?: boolean;
 }
 
 /** The AI player's hand: where it is over the map and what it is carrying. */
@@ -185,14 +187,17 @@ const BUILDING_FRAGMENT_COLOR = /* glsl */ `
   float frun = (vState > 0.5 && vState < 1.5) ? 1.0 : 0.0;
   if (fmode == 1) {
     // Slats that travel along the belt at the speed the items move.
-    float s = fract(vAnim.y * 4.0 - uTime * uBeltSpeed * 4.0);
+    // A belt under water stands still.
+    float moving = vState < 3.5 ? 1.0 : 0.0;
+    float s = fract(vAnim.y * 4.0 - uTime * uBeltSpeed * 4.0 * moving);
     float slat = smoothstep(0.4, 0.5, s) * (1.0 - smoothstep(0.9, 1.0, s));
     diffuseColor.rgb *= mix(0.72, 1.3, slat);
   } else if (fmode == 6) {
     diffuseColor.rgb = statusColor(vState) * 0.3;
   } else if (fmode != 5 && fmode != 9 && vState > 1.5) {
-    // A wash of amber or red over a machine that is starved or blocked.
-    diffuseColor.rgb = mix(diffuseColor.rgb, statusColor(vState), 0.2);
+    // A wash of amber or red over a machine that is starved or blocked, and a
+    // stronger blue one over anything standing in water.
+    diffuseColor.rgb = mix(diffuseColor.rgb, statusColor(vState), vState > 3.5 ? 0.42 : 0.2);
   }
 `;
 
@@ -301,6 +306,33 @@ const TIDE_FRAGMENT = /* glsl */ `
   }
 `;
 
+// The forecast: the same sheet as the tide, coloured by how long each piece of
+// dry tidal ground has before the water reaches it.
+const FORECAST_FRAGMENT = /* glsl */ `
+  uniform float uLevel;
+  uniform float uRising;
+  uniform float uLow;
+  uniform float uMinutesPerLevel;
+  varying float vH;
+  varying vec3 vWorld;
+  void main() {
+    if (vH <= uLevel) discard;
+    // Rising water has only to climb to this ground. Falling water goes down to low tide and comes back first.
+    float levels = uRising > 0.5 ? vH - uLevel : (uLevel - uLow) + (vH - uLow);
+    float minutes = levels * uMinutesPerLevel;
+    vec3 color = minutes < 2.0 ? vec3(0.95, 0.2, 0.15)
+      : minutes < 5.0 ? vec3(1.0, 0.55, 0.1)
+      : minutes < 10.0 ? vec3(0.98, 0.85, 0.2)
+      : vec3(0.35, 0.8, 0.45);
+    // A line along each level of ground, like the contours on a chart.
+    float f = fract(vH);
+    float line = 1.0 - smoothstep(0.0, 0.08, min(f, 1.0 - f));
+    gl_FragColor = vec4(color * (1.0 - 0.35 * line), 0.46 + 0.2 * line);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }
+`;
+
 const ITEM_VERTEX = /* glsl */ `
   attribute vec3 aPrev;
   attribute vec3 aCur;
@@ -398,6 +430,9 @@ export class GameRenderer {
   private readonly water: THREE.Mesh;
   private readonly tideLevel = { value: TIDE_LOW };
   private readonly tideMaterial: THREE.ShaderMaterial;
+  private readonly tideRising = { value: 1 };
+  private readonly forecastMaterial: THREE.ShaderMaterial;
+  private readonly pasteWarn = new THREE.MeshBasicMaterial({ color: 0xffc04d, transparent: true, opacity: 0.6, depthWrite: false });
   private readonly sceneryModels: THREE.BufferGeometry[];
   private readonly sceneryPatches: SceneryPatch[] = [];
 
@@ -545,6 +580,19 @@ export class GameRenderer {
       transparent: true,
       depthWrite: false,
     });
+    this.forecastMaterial = new THREE.ShaderMaterial({
+      vertexShader: TIDE_VERTEX,
+      fragmentShader: FORECAST_FRAGMENT,
+      uniforms: {
+        uLevel: this.tideLevel,
+        uRising: this.tideRising,
+        uLow: { value: TIDE_LOW },
+        uMinutesPerLevel: { value: TIDE_CYCLE_SECONDS / 120 / (TIDE_HIGH - TIDE_LOW + 1) },
+      },
+      transparent: true,
+      depthWrite: false,
+      visible: false,
+    });
     this.water.position.set(HUB_X, WATER_LEVEL, HUB_Y);
     this.water.renderOrder = 1;
     this.scene.add(this.water);
@@ -631,6 +679,11 @@ export class GameRenderer {
     return { x: Math.floor(origin.x + direction.x * t), y: Math.floor(origin.z + direction.z * t) };
   }
 
+  /** Shows or hides the colours that say how soon each piece of tidal ground floods. */
+  setForecast(on: boolean): void {
+    this.forecastMaterial.visible = on;
+  }
+
   setGhost(ghost: Ghost | null): void {
     for (const mesh of this.ghostMeshes.values()) mesh.visible = false;
     if (!ghost) return;
@@ -639,7 +692,7 @@ export class GameRenderer {
     mesh.visible = true;
     mesh.position.set(ghost.x + 0.5, 0.02, ghost.y + 0.5);
     mesh.quaternion.copy(this.quaternions[ghost.dir & 3]);
-    this.ghostMaterial.color.setHex(ghost.ok ? 0x7dffa0 : 0xff5a5a);
+    this.ghostMaterial.color.setHex(!ghost.ok ? 0xff5a5a : ghost.warn ? 0xffc04d : 0x7dffa0);
   }
 
   /** Shows every building a paste would place. An empty list hides them. */
@@ -660,7 +713,7 @@ export class GameRenderer {
         continue;
       }
       mesh.geometry = model.geometry;
-      mesh.material = ghost.ok ? this.pasteOk : this.pasteBad;
+      mesh.material = !ghost.ok ? this.pasteBad : ghost.warn ? this.pasteWarn : this.pasteOk;
       mesh.position.set(ghost.x + 0.5, 0.02, ghost.y + 0.5);
       mesh.quaternion.copy(this.quaternions[ghost.dir & 3]);
       mesh.visible = true;
@@ -869,6 +922,7 @@ export class GameRenderer {
 
     this.time.value = ((sim.tick + alpha) / TICKS_PER_SECOND) % 3600;
     this.tideLevel.value = tideSmooth(sim.tick + alpha);
+    this.tideRising.value = tideInfo(sim.tick).rising ? 1 : 0;
     const sinceStep = sim.tick - sim.lastBeltStepTick + alpha;
     this.itemMaterial.uniforms.uAlpha.value = THREE.MathUtils.clamp(sinceStep / sim.beltPeriod, 0, 1);
 
@@ -948,6 +1002,13 @@ export class GameRenderer {
         sheet.matrixAutoUpdate = false;
         sheet.renderOrder = 1;
         mesh.add(sheet);
+        // The forecast is the same shape, a hair higher, and only drawn when asked for.
+        const forecast = new THREE.Mesh(tide, this.forecastMaterial);
+        forecast.matrixAutoUpdate = false;
+        forecast.position.y = 0.012;
+        forecast.updateMatrix();
+        forecast.renderOrder = 2;
+        mesh.add(forecast);
       }
       this.chunkMeshes.set(chunk, { mesh, radius: this.sim.world.radius });
       this.scene.add(mesh);
@@ -1350,10 +1411,16 @@ export class GameRenderer {
   /** Tells each machine's shader whether it is working, starved, blocked or idle. */
   private syncStatus(): void {
     const sim = this.sim;
-    for (const batch of this.batches.values()) {
-      if (!batch.live) continue;
+    for (const [key, batch] of this.batches) {
+      // Deck pieces belong to no building of their own.
+      if (key === 'bridge_deck') continue;
       const state = batch.state.array as Float32Array;
-      for (let i = 0; i < batch.count; i++) state[i] = sim.status[batch.slots[i]];
+      if (batch.live) {
+        for (let i = 0; i < batch.count; i++) state[i] = sim.status[batch.slots[i]];
+      } else {
+        // Everything else only has two looks: as normal, or standing in water.
+        for (let i = 0; i < batch.count; i++) state[i] = sim.isDormant(batch.slots[i]) ? STATUS_DORMANT : 1;
+      }
       batch.state.needsUpdate = true;
     }
   }

@@ -7,12 +7,12 @@
 // agent loop, and directly by tests.
 
 import {
-  BUILDINGS, BUILDING_BY_ID, BUILDING_BY_KEY, GOALS, ITEMS, ITEM_BY_ID, ITEM_BY_KEY, MINER_SECONDS, RECIPES, TECHS, TECH_BY_KEY, TIDE_CYCLE_SECONDS,
+  BUILDINGS, BUILDING_BY_ID, BUILDING_BY_KEY, GOALS, ITEMS, ITEM_BY_ID, ITEM_BY_KEY, MINER_SECONDS, RECIPES, TECHS, TECH_BY_KEY, TIDE_CYCLE_SECONDS, TIDE_HIGH,
   RECIPE_BY_ID, RECIPE_BY_KEY, TICKS_PER_SECOND, BELT_SLOTS, buildingId, type BuildingDef, type BuildingKey,
 } from '../content/content';
 import {
   DX, DY, HUB_X, HUB_Y, ROLE_BELT, ROLE_BRIDGE, ROLE_CRATE, ROLE_FILTER, ROLE_HUB, ROLE_MACHINE, ROLE_MINER, ROLE_SPLITTER, STATUS_BLOCKED, STATUS_DORMANT, STATUS_STARVED,
-  STATUS_WORKING, Sim, TERRAIN_LAND, tideInfo,
+  STATUS_WORKING, Sim, TERRAIN_LAND, flooding, tideInfo,
 } from '../sim';
 
 /** Where the agent's actions land: a headless simulation or the live game. */
@@ -50,7 +50,7 @@ const DIRS = ['E', 'S', 'W', 'N'] as const;
 const BELT = buildingId('belt');
 const MAX_WAIT_SECONDS = 300;
 const MAX_VIEW_RADIUS = 15;
-const MAP_SYMBOL: Record<string, string> = { miner: 'M', sawmill: 'W', kiln: 'K', assembler: 'A', splitter: 'Y', hub: 'H' };
+const MAP_SYMBOL: Record<string, string> = { miner: 'M', sawmill: 'W', kiln: 'K', assembler: 'A', splitter: 'Y', crate: 'B', bridge: '=', filter: 'F', hub: 'H' };
 const DEPOSIT_SYMBOL: Record<string, string> = { timber: 't', stone: 's', iron_ore: 'i', copper_ore: 'c', coal: 'k' };
 const BELT_SYMBOL = ['>', 'v', '<', '^'];
 
@@ -214,6 +214,32 @@ function itemKey(id: number): string {
 function clock(tick: number): string {
   const s = Math.floor(tick / TICKS_PER_SECOND);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+/** What the tide will do to a tile, or '' for ground that never floods. */
+function tideText(sim: Sim, x: number, y: number): string {
+  const f = flooding(sim.world.heightAt(x, y), sim.tick);
+  if (f.kind !== 'tidal') return '';
+  const share = `it is under water for ${clock(f.wetTicks)} of every ${clock(TIDE_CYCLE_SECONDS * TICKS_PER_SECOND)}`;
+  return f.wet ? `TIDAL GROUND, under water now, dry again in ${clock(f.ticksToChange)}; ${share}` : `TIDAL GROUND, floods in ${clock(f.ticksToChange)}; ${share}`;
+}
+
+/** A warning for a set of freshly built tiles that the tide covers, or ''. */
+function tideWarning(sim: Sim, tiles: { x: number; y: number }[]): string {
+  const tidal = tiles.filter((t) => sim.world.heightAt(t.x, t.y) < TIDE_HIGH);
+  if (!tidal.length) return '';
+  let soonest = tidal[0];
+  let soonestTicks = Infinity;
+  for (const t of tidal) {
+    const f = flooding(sim.world.heightAt(t.x, t.y), sim.tick);
+    const ticks = f.wet ? 0 : f.ticksToChange;
+    if (ticks < soonestTicks) {
+      soonestTicks = ticks;
+      soonest = t;
+    }
+  }
+  const what = tiles.length === 1 ? 'This tile is' : `${tidal.length} of these ${tiles.length} tiles are`;
+  return ` TIDE WARNING: ${what} on tidal ground. Everything on a flooded tile stops until the water drops, which blocks the whole line. The first to flood is ${at(soonest.x, soonest.y)}: ${tideText(sim, soonest.x, soonest.y)}.`;
 }
 
 function costText(def: BuildingDef): string {
@@ -486,14 +512,16 @@ function viewMap(sim: Sim, input: Record<string, unknown>): string {
       } else if (sim.world.terrainAt(x, y) !== TERRAIN_LAND) ch = '~';
       else {
         const deposit = sim.world.depositAt(x, y);
-        ch = deposit ? DEPOSIT_SYMBOL[itemKey(deposit)] ?? '?' : '.';
+        const tidal = sim.world.heightAt(x, y) < TIDE_HIGH;
+        // A deposit on tidal ground is shown in capitals.
+        ch = deposit ? (tidal ? (DEPOSIT_SYMBOL[itemKey(deposit)] ?? '?').toUpperCase() : DEPOSIT_SYMBOL[itemKey(deposit)] ?? '?') : tidal ? ':' : '.';
       }
       row += ' ' + ch;
     }
     lines.push(row);
   }
   lines.push(`Rows are y from ${cy - radius - HUB_Y} to ${cy + radius - HUB_Y}; columns are x from ${cx - radius - HUB_X} to ${cx + radius - HUB_X}.`);
-  lines.push('Key: . ground, ~ water, # off the map, deposits t timber s stone i iron_ore c copper_ore k coal, belts > v < ^, M miner, W sawmill, K kiln, A assembler, Y splitter, H hub.');
+  lines.push('Key: . ground, : tidal ground that is dry now but floods at high tide, ~ water now, # off the map, deposits t timber s stone i iron_ore c copper_ore k coal (T S I C in capitals when on tidal ground), belts > v < ^, M miner, W sawmill, K kiln, A assembler, Y splitter, B crate, = bridge end, F filter, H hub. Use inspect on a tile to learn when it floods.');
   const listed = [...seen].filter((s) => !sim.isBelt(s) && sim.role(s) !== ROLE_HUB);
   if (listed.length) {
     lines.push('Buildings in view:');
@@ -552,7 +580,8 @@ function inspect(sim: Sim, input: Record<string, unknown>): string {
   if (!sim.world.hasTile(x, y)) return `${at(x, y)} is off the map.`;
   const slot = sim.world.buildingAt(x, y);
   const deposit = sim.world.depositAt(x, y);
-  const ground = sim.world.terrainAt(x, y) !== TERRAIN_LAND ? 'water' : deposit ? `${itemKey(deposit)} deposit${sim.unlockedResources[deposit] ? '' : ' (not usable yet)'}` : 'open ground';
+  const tide = tideText(sim, x, y);
+  const ground = (sim.world.terrainAt(x, y) !== TERRAIN_LAND ? 'water' : deposit ? `${itemKey(deposit)} deposit${sim.unlockedResources[deposit] ? '' : ' (not usable yet)'}` : 'open ground') + (tide ? ` (${tide})` : '');
   if (slot < 0) return `${at(x, y)}: ${ground}, nothing built.`;
   const role = sim.role(slot);
   const extra = role === ROLE_HUB || role === ROLE_SPLITTER ? '' : ' ' + frontText(sim, slot);
@@ -589,7 +618,7 @@ async function build(host: AgentHost, input: Record<string, unknown>): Promise<s
   if (def.role === 'machine') parts.push(sim.recipe[slot] ? `Recipe ${RECIPE_BY_ID[sim.recipe[slot]]!.key}: ${recipeText(sim.recipe[slot])}.` : 'It has no recipe yet.');
   if (def.role !== 'splitter') parts.push(frontText(sim, slot));
   if (def.role === 'machine' && !hasFeeder(sim, slot)) parts.push('Nothing points into it yet.');
-  parts.push(`Stock: ${stockText(sim)}.`);
+  parts.push(`Stock: ${stockText(sim)}.${tideWarning(sim, [{ x, y }])}`);
   return parts.join(' ');
 }
 
@@ -625,7 +654,7 @@ async function layBelts(host: AgentHost, tiles: BeltTile[]): Promise<string> {
   const turned = tiles.length - fresh;
   const corners = tiles.filter((t, i) => i === 0 || i === tiles.length - 1 || tiles[i - 1].dir !== t.dir).map((t) => at(t.x, t.y)).join(' -> ');
   const end = sim.world.buildingAt(last.x, last.y);
-  return `Laid ${fresh} belt${fresh === 1 ? '' : 's'}${turned ? ` and turned ${turned} existing` : ''}: ${corners}. The last belt at ${at(last.x, last.y)} faces ${DIRS[last.dir]}. ${frontText(sim, end)} Stock: ${stockText(sim)}.`;
+  return `Laid ${fresh} belt${fresh === 1 ? '' : 's'}${turned ? ` and turned ${turned} existing` : ''}: ${corners}. The last belt at ${at(last.x, last.y)} faces ${DIRS[last.dir]}. ${frontText(sim, end)} Stock: ${stockText(sim)}.${tideWarning(sim, tiles)}`;
 }
 
 function buildBelt(host: AgentHost, input: Record<string, unknown>): Promise<string> {
@@ -789,7 +818,8 @@ async function connect(host: AgentHost, input: Record<string, unknown>): Promise
       const nx = x + DX[nd];
       const ny = y + DY[nd];
       if (nx < x0 || ny < y0 || nx > x1 || ny > y1 || !open(nx, ny)) continue;
-      const step = 10 + (nd === d ? 0 : 3) + (sim.world.depositAt(nx, ny) ? 12 : 0);
+      // Ground the tide covers is a last resort: a belt there stops the line at high water.
+      const step = 10 + (nd === d ? 0 : 3) + (sim.world.depositAt(nx, ny) ? 12 : 0) + (sim.world.heightAt(nx, ny) < TIDE_HIGH ? 60 : 0);
       const next = stateOf(nx, ny, nd);
       if (cost + step < best[next]) {
         best[next] = cost + step;

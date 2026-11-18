@@ -57,6 +57,9 @@ button.active kbd { color: #1b1f24; border-color: rgba(0, 0, 0, 0.3); }
 .recipes { display: flex; flex-direction: column; gap: 5px; margin: 8px 0; }
 .recipes button { text-align: left; display: flex; flex-direction: column; gap: 1px; }
 .recipes small { opacity: 0.8; }
+.message.tide-note { background: #ffc04d; }
+.forecast-key { display: flex; gap: 12px; align-items: center; font-size: 12px; padding: 4px 10px; border-radius: 8px; background: rgba(18, 22, 30, 0.82); }
+.forecast-key i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
 .tide { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .tide-gauge { position: relative; width: 9px; height: 22px; border-radius: 3px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
 .tide-gauge i { position: absolute; left: 0; right: 0; bottom: 0; background: #4aa3d8; transition: height 0.4s; }
