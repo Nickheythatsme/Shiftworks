@@ -4,12 +4,12 @@
 
 import {
   BRIDGE_SPAN, BUILDINGS, BUILDING_BY_ID, CRATE_CAPACITY, FINAL_STAGE, GOALS, ITEMS, ITEM_BY_ID, ITEM_BY_KEY, RECIPES, RECIPE_BY_ID, RECIPE_BY_KEY, TECHS, TECH_BY_ID, TECH_BY_KEY,
-  TICKS_PER_SECOND, buildingId, type BuildingDef,
+  TICKS_PER_SECOND, TIDE_HIGH, TIDE_LOW, buildingId, type BuildingDef,
 } from './content/content';
 import { GameRenderer } from './render/renderer';
 import {
   DX, DY, HUB_X, HUB_Y, ROLE_BRIDGE, ROLE_CRATE, ROLE_FILTER, ROLE_HUB, ROLE_MACHINE, ROLE_MINER, STATUS_BLOCKED, STATUS_IDLE, STATUS_STARVED, STATUS_WORKING,
-  Sim, loadSim, saveSim,
+  Sim, loadSim, saveSim, tideInfo,
 } from './sim';
 import { readSave, writeSave } from './storage';
 import type { AgentHost, StagedStep } from './agent/tools';
@@ -74,6 +74,8 @@ export interface UiState {
   /** An AI player is in control of the clock. */
   aiActive: boolean;
   seconds: number;
+  /** The tide: how far up its range the water is (0 low, 1 high), which way it is going, and seconds until it turns. */
+  tide: { fraction: number; rising: boolean; toTurn: number };
   stage: string;
   goalNumber: number;
   goalCount: number;
@@ -944,6 +946,7 @@ export class Game {
     this.toasts = this.toasts.filter((t) => t.until > now);
     if (now > this.messageUntil) this.message = '';
 
+    const tide = tideInfo(sim.tick);
     const goal = GOALS[sim.goalIndex];
     const needs: UiNeed[] = (goal?.needs ?? []).map((n) => {
       const item = ITEM_BY_KEY.get(n.item)!;
@@ -960,6 +963,11 @@ export class Game {
       paused: this.paused,
       aiActive: this.aiActive,
       seconds: Math.floor(sim.tick / TICKS_PER_SECOND),
+      tide: {
+        fraction: (tide.level - TIDE_LOW) / (TIDE_HIGH - TIDE_LOW),
+        rising: tide.rising,
+        toTurn: Math.ceil(tide.ticksToTurn / TICKS_PER_SECOND),
+      },
       stage: goal?.stage ?? FINAL_STAGE,
       goalNumber: sim.goalIndex + 1,
       goalCount: GOALS.length,
@@ -1026,7 +1034,9 @@ export class Game {
       const locked = this.sim.unlockedResources[deposit] ? '' : ' (not usable yet)';
       return `${ITEM_BY_ID[deposit]?.name ?? ''} deposit${locked}`;
     }
-    return this.sim.world.terrainAt(h.x, h.y) === 0 ? 'Open ground' : 'Water';
+    const height = this.sim.world.heightAt(h.x, h.y);
+    if (this.sim.world.terrainAt(h.x, h.y) !== 0) return height < TIDE_LOW ? 'Water' : 'Water. This ground is dry at low tide';
+    return height < TIDE_HIGH ? 'Open ground. The tide covers it at high water' : 'Open ground';
   }
 
   private describeSelected(): UiState['selected'] {
@@ -1065,6 +1075,10 @@ export class Game {
     if (role === ROLE_HUB) {
       status = 'Belts pointing into the hub deliver to the town';
       statusKind = 'ok';
+    }
+    if (sim.isDormant(slot)) {
+      status = 'Under water. It keeps what it holds and carries on when the tide goes out';
+      statusKind = 'idle';
     }
     if (role === ROLE_CRATE) {
       detail.push(sim.out[slot] ? `Holding ${sim.out[slot]} of ${CRATE_CAPACITY} ${ITEM_BY_ID[sim.aux[slot]]?.name.toLowerCase()}` : `Empty. Holds up to ${CRATE_CAPACITY} of one item`);

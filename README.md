@@ -7,8 +7,8 @@ unlock the next step.
 This build covers milestones 1 to 4 of the design: the map and camera, belts and
 miners, machines and recipes, and the town with unlocks and saves. Phase 5, an
 economy that demands scale, is built: rate gates, a town that learns and uses
-goods, crates, bridges and filters, copy and paste, and undo. The moving map
-(phase 6) is not built yet.
+goods, crates, bridges and filters, copy and paste, and undo. Phase 6, the moving map, has
+started: the tide rises and falls and floods low ground.
 
 ## Run it
 
@@ -74,6 +74,12 @@ Then open http://localhost:5173.
 - **The town uses goods.** From the hamlet on it takes planks, bricks and iron
   plate out of the hub every minute. If the hub runs out of one, the gate's
   count pauses until some arrives, so the early lines have to keep running.
+- **The tide.** The water rises for 20 minutes and falls for 20. Ground near
+  the water, shown sandy and muddy, is dry at low tide and covered at high
+  tide; the ground round the hub never floods. A building standing in water
+  stops, keeps what it holds, and carries on when the water drops. Nothing can
+  be placed on water, but a flooded building can still be removed. The gauge
+  by the clock shows how high the water is and how long until it turns.
 - **Blue means in, orange means out.** Every building has glowing blue arrows
   on the sides it takes items from and an orange arrow where it pushes them
   out. Larger floating arrows show the same thing on the building you are

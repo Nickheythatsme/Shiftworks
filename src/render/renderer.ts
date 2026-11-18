@@ -5,11 +5,11 @@
 
 import * as THREE from 'three';
 import {
-  BELT_SLOTS, BUILDINGS, GOALS, ITEMS, ITEM_BY_ID, ITEM_COUNT, TICKS_PER_SECOND, buildingId, type BuildingKey,
+  BELT_SLOTS, BUILDINGS, GOALS, TIDE_HIGH, TIDE_LOW, ITEMS, ITEM_BY_ID, ITEM_COUNT, TICKS_PER_SECOND, buildingId, type BuildingKey,
 } from '../content/content';
 import {
   CHUNK, CHUNK_SHIFT, DX, DY, HUB_X, HUB_Y, MAX_CHUNKS, MOVED_ENTERED, MOVED_SLOT, ROLE_BELT, ROLE_BRIDGE, ROLE_CRATE, ROLE_FILTER, ROLE_HUB, ROLE_MACHINE, ROLE_MINER,
-  ROLE_SPLITTER, TERRAIN_WATER, type Chunk, type Sim,
+  ROLE_SPLITTER, tideSmooth, type Chunk, type Sim,
 } from '../sim';
 import { hash3 } from '../sim/hash';
 import { CameraRig } from './camera';
@@ -23,6 +23,8 @@ const ITEM_Y = 0.19;
 const HAZE = 0x9fc0d2;
 const WATER_LEVEL = -0.13;
 const SEABED = -0.5;
+/** The tide's water lies just over the ground: below the top of a belt, so a flooded factory still shows. */
+const TIDE_SHEET_Y = 0.05;
 /** Texels per tile in the painted ground texture. */
 const TEXELS = 4;
 const HUB_STAGES = 3;
@@ -172,7 +174,9 @@ const BUILDING_FRAGMENT_PARS = /* glsl */ `
     if (s < 0.5) return vec3(0.36, 0.38, 0.44);
     if (s < 1.5) return vec3(0.2, 0.95, 0.4);
     if (s < 2.5) return vec3(1.0, 0.7, 0.12);
-    return vec3(1.0, 0.2, 0.16);
+    if (s < 3.5) return vec3(1.0, 0.2, 0.16);
+    // Under water.
+    return vec3(0.25, 0.55, 1.0);
   }
 `;
 
@@ -256,6 +260,47 @@ const WATER_FRAGMENT = /* glsl */ `
   }
 `;
 
+// The tide: a sheet of water over every tile the tide can reach, drawn only
+// where the ground is lower than the water level. The level is one number, so
+// the shoreline moves without anything being rebuilt.
+const TIDE_VERTEX = /* glsl */ `
+  attribute float aH;
+  varying float vH;
+  varying vec3 vWorld;
+  void main() {
+    vH = aH;
+    vec4 world = modelMatrix * vec4(position, 1.0);
+    vWorld = world.xyz;
+    gl_Position = projectionMatrix * viewMatrix * world;
+  }
+`;
+
+const TIDE_FRAGMENT = /* glsl */ `
+  uniform float uTime;
+  uniform float uLevel;
+  uniform vec3 uHaze;
+  varying float vH;
+  varying vec3 vWorld;
+  ${NOISE}
+  void main() {
+    float depth = uLevel - vH;
+    if (depth <= 0.0) discard;
+    vec2 p = vWorld.xz - vec2(1000.0);
+    float t = uTime;
+    float w = tnoise(p * 0.55 + vec2(t * 0.22, t * 0.15)) + 0.5 * tnoise(p * 1.6 - vec2(t * 0.2, -t * 0.28));
+    vec3 color = mix(vec3(0.07, 0.25, 0.42), vec3(0.16, 0.5, 0.66), smoothstep(0.35, 1.15, w));
+    color += smoothstep(1.12, 1.3, w) * 0.22;
+    // A pale line of foam where the water meets the ground, and clearer water in the shallows.
+    float edge = 1.0 - smoothstep(0.0, 0.4, depth);
+    color = mix(color, vec3(0.86, 0.93, 0.9), edge * 0.7);
+    float alpha = mix(0.42, 0.8, smoothstep(0.0, 3.0, depth));
+    float far = smoothstep(150.0, 480.0, distance(vWorld, cameraPosition));
+    gl_FragColor = vec4(mix(color, uHaze, far), mix(alpha, 1.0, far));
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }
+`;
+
 const ITEM_VERTEX = /* glsl */ `
   attribute vec3 aPrev;
   attribute vec3 aCur;
@@ -304,6 +349,8 @@ const GRASS_A = rgb(0x6f9f52);
 const GRASS_B = rgb(0x8ab35c);
 const GRASS_DRY = rgb(0xa3b565);
 const SAND = rgb(0xdccb98);
+/** Ground the tide covers and uncovers: darker and wetter the lower it lies. */
+const MUD = rgb(0x8f8566);
 const SHALLOW = rgb(0xc9bd8c);
 const DEEP = rgb(0x5b7f86);
 const DEPOSIT_GROUND: Record<string, [number, number, number]> = {
@@ -349,6 +396,8 @@ export class GameRenderer {
   /** Chunks whose ground still has to be built, nearest the camera first. */
   private chunkQueue: Chunk[] = [];
   private readonly water: THREE.Mesh;
+  private readonly tideLevel = { value: TIDE_LOW };
+  private readonly tideMaterial: THREE.ShaderMaterial;
   private readonly sceneryModels: THREE.BufferGeometry[];
   private readonly sceneryPatches: SceneryPatch[] = [];
 
@@ -489,6 +538,13 @@ export class GameRenderer {
         depthWrite: false,
       }),
     );
+    this.tideMaterial = new THREE.ShaderMaterial({
+      vertexShader: TIDE_VERTEX,
+      fragmentShader: TIDE_FRAGMENT,
+      uniforms: { uTime: this.time, uLevel: this.tideLevel, uHaze: { value: new THREE.Color(HAZE) } },
+      transparent: true,
+      depthWrite: false,
+    });
     this.water.position.set(HUB_X, WATER_LEVEL, HUB_Y);
     this.water.renderOrder = 1;
     this.scene.add(this.water);
@@ -812,6 +868,7 @@ export class GameRenderer {
     this.portIn.opacity = pulse;
 
     this.time.value = ((sim.tick + alpha) / TICKS_PER_SECOND) % 3600;
+    this.tideLevel.value = tideSmooth(sim.tick + alpha);
     const sinceStep = sim.tick - sim.lastBeltStepTick + alpha;
     this.itemMaterial.uniforms.uAlpha.value = THREE.MathUtils.clamp(sinceStep / sim.beltPeriod, 0, 1);
 
@@ -885,6 +942,13 @@ export class GameRenderer {
       const mesh = new THREE.Mesh(this.shapeChunk(chunk), material);
       mesh.receiveShadow = true;
       mesh.matrixAutoUpdate = false;
+      const tide = this.shapeTide(chunk);
+      if (tide) {
+        const sheet = new THREE.Mesh(tide, this.tideMaterial);
+        sheet.matrixAutoUpdate = false;
+        sheet.renderOrder = 1;
+        mesh.add(sheet);
+      }
       this.chunkMeshes.set(chunk, { mesh, radius: this.sim.world.radius });
       this.scene.add(mesh);
     }
@@ -893,9 +957,49 @@ export class GameRenderer {
   private disposeChunk(mesh: THREE.Mesh): void {
     this.scene.remove(mesh);
     mesh.geometry.dispose();
+    for (const child of mesh.children) (child as THREE.Mesh).geometry.dispose();
     const material = mesh.material as THREE.MeshLambertMaterial;
     material.map?.dispose();
     material.dispose();
+  }
+
+  /**
+   * The water the tide brings: a flat square just above the ground on every
+   * tile the tide can cover, carrying the ground's height at each corner so the
+   * shader can stop the water where the ground rises above it. Corners take the
+   * average of the tiles round them, so the shoreline is a smooth line and not
+   * a staircase. Null for a chunk the tide never touches.
+   */
+  private shapeTide(chunk: Chunk): THREE.BufferGeometry | null {
+    const world = this.sim.world;
+    const x0 = chunk.cx << CHUNK_SHIFT;
+    const y0 = chunk.cy << CHUNK_SHIFT;
+    const clamped = (x: number, y: number) => Math.max(TIDE_LOW - 4, Math.min(TIDE_HIGH + 4, world.heightAt(x, y)));
+    const corner = (x: number, y: number) => (clamped(x - 1, y - 1) + clamped(x, y - 1) + clamped(x - 1, y) + clamped(x, y)) / 4;
+    const positions: number[] = [];
+    const heights: number[] = [];
+    const index: number[] = [];
+    for (let ty = 0; ty < CHUNK; ty++) {
+      for (let tx = 0; tx < CHUNK; tx++) {
+        const h = chunk.height[(ty << CHUNK_SHIFT) + tx];
+        if (h < TIDE_LOW || h >= TIDE_HIGH) continue;
+        const x = x0 + tx;
+        const y = y0 + ty;
+        const n = positions.length / 3;
+        for (const [ox, oy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+          positions.push(x + ox, TIDE_SHEET_Y, y + oy);
+          heights.push(corner(x + ox, y + oy));
+        }
+        index.push(n, n + 2, n + 1, n + 1, n + 2, n + 3);
+      }
+    }
+    if (index.length === 0) return null;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+    geometry.setAttribute('aH', new THREE.BufferAttribute(new Float32Array(heights), 1));
+    geometry.setIndex(new THREE.BufferAttribute(new Uint16Array(index), 1));
+    geometry.computeBoundingSphere();
+    return geometry;
   }
 
   /**
@@ -907,7 +1011,8 @@ export class GameRenderer {
     const world = this.sim.world;
     const x0 = chunk.cx << CHUNK_SHIFT;
     const y0 = chunk.cy << CHUNK_SHIFT;
-    const wet = (x: number, y: number) => world.terrainAt(x, y) === TERRAIN_WATER;
+    // Water that is there at every state of the tide. The tide's own water is drawn over the ground.
+    const wet = (x: number, y: number) => world.heightAt(x, y) < TIDE_LOW;
     // Points sit on a half-tile grid, created only where a triangle uses them.
     const side = CHUNK * 2 + 1;
     const lookup = new Int32Array(side * side).fill(-1);
@@ -971,7 +1076,8 @@ export class GameRenderer {
     const data = new Uint8Array(size * size * 4);
     const x0 = chunk.cx << CHUNK_SHIFT;
     const y0 = chunk.cy << CHUNK_SHIFT;
-    const wet = (x: number, y: number) => world.terrainAt(x, y) === TERRAIN_WATER;
+    // Water that is there at every state of the tide. The tide's own water is drawn over the ground.
+    const wet = (x: number, y: number) => world.heightAt(x, y) < TIDE_LOW;
     for (let py = 0; py < size; py++) {
       for (let px = 0; px < size; px++) {
         const h = hash3(seed ^ 0x7e11, x0 * TEXELS + px, y0 * TEXELS + py);
@@ -993,6 +1099,12 @@ export class GameRenderer {
             color = mix3(color, DEPOSIT_GROUND[ITEM_BY_ID[deposit]?.key ?? ''] ?? color, 0.82);
           } else if (wet(tx - 1, ty) || wet(tx + 1, ty) || wet(tx, ty - 1) || wet(tx, ty + 1)) {
             color = mix3(color, SAND, 0.8);
+          }
+          const height = world.heightAt(tx, ty);
+          if (height < TIDE_HIGH) {
+            // Tidal ground: sand at the top of the tide's reach, mud at the bottom.
+            const low = (TIDE_HIGH - height) / (TIDE_HIGH - TIDE_LOW);
+            color = mix3(color, mix3(SAND, MUD, low), deposit ? 0.3 : 0.45 + 0.35 * low);
           }
         }
         const speckle = 0.94 + ((h >> 16) & 255) / 255 * 0.12;
@@ -1026,7 +1138,8 @@ export class GameRenderer {
     let spots: SceneryPatch['spots'][] = [];
     const [PINE_A, PINE_B, ROUND, BUSH, TUFT, ROCK, STUMP] = [0, 1, 2, 3, 4, 5, 6];
     const grey = new THREE.Color(0x9a9a94);
-    const wet = (x: number, y: number) => world.terrainAt(x, y) === TERRAIN_WATER;
+    // Water that is there at every state of the tide. The tide's own water is drawn over the ground.
+    const wet = (x: number, y: number) => world.heightAt(x, y) < TIDE_LOW;
     const add = (kind: number, _chunk: Chunk, tile: number, x: number, z: number, scale: number, turn: number, color: THREE.Color | null) => {
       const matrix = new THREE.Matrix4().compose(
         new THREE.Vector3(x, 0, z),
@@ -1037,8 +1150,9 @@ export class GameRenderer {
     };
     for (const chunk of world.chunks) {
       spots = this.sceneryModels.map(() => []);
-      for (let i = 0; i < chunk.terrain.length; i++) {
-        if (chunk.terrain[i] === TERRAIN_WATER) continue;
+      for (let i = 0; i < chunk.height.length; i++) {
+        // Nothing grows where the tide comes in.
+        if (chunk.height[i] < TIDE_HIGH) continue;
         const tx = (chunk.cx << CHUNK_SHIFT) + (i & (CHUNK - 1));
         const ty = (chunk.cy << CHUNK_SHIFT) + (i >> CHUNK_SHIFT);
         const deposit = chunk.deposit[i];

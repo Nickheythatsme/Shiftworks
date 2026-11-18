@@ -31,6 +31,7 @@ import {
   recipeId,
 } from '../content/content';
 import { FNV_OFFSET, fnv1a } from './hash';
+import { tideLevel } from './tide';
 import { HUB_X, HUB_Y, START_RADIUS, TERRAIN_LAND, World, type WorldType } from './world';
 
 export const DX = [1, 0, -1, 0];
@@ -40,6 +41,8 @@ export const STATUS_IDLE = 0;
 export const STATUS_WORKING = 1;
 export const STATUS_STARVED = 2;
 export const STATUS_BLOCKED = 3;
+/** Under water: the building does nothing until the tide leaves it. */
+export const STATUS_DORMANT = 4;
 
 /** Belt `moved` codes: 0 still, 1 advanced one slot, 2 + side it entered from. */
 export const MOVED_NONE = 0;
@@ -181,6 +184,10 @@ export class Sim {
   private order = new Int32Array(this.capacity);
   private orderCount = 0;
   private orderState = new Uint8Array(this.capacity);
+  /** 1 for a building standing in water. It makes, moves and accepts nothing until the water leaves. */
+  private dormant = new Uint8Array(this.capacity);
+  /** Goes up whenever the water level changes. */
+  tideVersion = 0;
   /** Bridges: the slot of the far end this one sends items to, or -1. */
   private bridgeLink = new Int32Array(this.capacity).fill(-1);
   /** Bridges: 1 if this is the far end of a pair, which only its near end may feed. */
@@ -212,6 +219,7 @@ export class Sim {
   constructor(options: SimOptions) {
     this.options = options;
     this.world = new World(options.seed, options.worldType ?? 'normal', START_RADIUS);
+    this.world.level = tideLevel(0);
     for (const b of BUILDINGS) {
       this.roleOf[b.id] = ROLE_CODE[b.role];
       this.costs[b.id] = options.freeBuild ? [] : b.cost.map((c) => [itemId(c.item), c.count]);
@@ -583,6 +591,7 @@ export class Sim {
     this.progress[slot] = 0;
     this.working[slot] = 0;
     this.status[slot] = 0;
+    this.dormant[slot] = 0;
     this.inA[slot] = 0;
     this.inB[slot] = 0;
     this.out[slot] = 0;
@@ -632,6 +641,9 @@ export class Sim {
     this.orderState = new Uint8Array(capacity);
     this.bridgeLink = new Int32Array(capacity).fill(-1);
     this.bridgeExit = new Uint8Array(capacity);
+    const dormant = new Uint8Array(capacity);
+    dormant.set(this.dormant);
+    this.dormant = dormant;
     this.capacity = capacity;
     this.topologyDirty = true;
   }
@@ -649,6 +661,8 @@ export class Sim {
       if (this.kind[s]) this.occupy(s, s);
     }
     this.lastBeltStepTick = this.tick;
+    this.world.level = tideLevel(this.tick);
+    this.refreshDormant();
     this.loadGoalNeed();
     this.changed();
   }
@@ -660,20 +674,25 @@ export class Sim {
     // 1. Commands stamped for this tick, in the order they were issued.
     this.applyQueued();
 
-    // 2. Machines and miners do their work, in slot order.
+    // 2. Once a second: the tide. Buildings the water reaches go dormant, and
+    //    the ones it leaves wake.
+    if (this.tick % TICKS_PER_SECOND === 0) this.updateTide();
+
+    // 3. Machines and miners do their work, in slot order.
     const count = this.count;
     for (let s = 0; s < count; s++) {
+      if (this.dormant[s]) continue;
       const role = this.roleOf[this.kind[s]];
       if (role === ROLE_MINER) this.updateMiner(s);
       else if (role === ROLE_MACHINE) this.updateMachine(s);
     }
 
-    // 3. Belts advance from the downstream end backwards, then machines put
+    // 4. Belts advance from the downstream end backwards, then machines put
     //    finished items out. Both happen on the belt beat so items move together.
     if (this.tick % this.beltPeriod === 0) {
       this.transportStep();
       for (let s = 0; s < count; s++) {
-        if (this.out[s] === 0) continue;
+        if (this.out[s] === 0 || this.dormant[s]) continue;
         const item = this.outputItem(s);
         const d = this.dir[s];
         if (item && this.tryInsert(this.bx[s] + DX[d], this.by[s] + DY[d], item, this.bx[s], this.by[s])) {
@@ -684,10 +703,35 @@ export class Sim {
       this.lastBeltStepTick = this.tick + 1;
     }
 
-    // 4. Once a second: the town.
+    // 5. Once a second: the town.
     if (this.tick % TICKS_PER_SECOND === 0) this.updateTown();
 
     this.tick++;
+  }
+
+  /** Whether the building in `slot` is standing in water. */
+  isDormant(slot: number): boolean {
+    return this.dormant[slot] === 1;
+  }
+
+  private updateTide(): void {
+    const level = tideLevel(this.tick);
+    if (level === this.world.level) return;
+    this.world.level = level;
+    this.tideVersion++;
+    this.refreshDormant();
+  }
+
+  /** Works out afresh which buildings stand in water. Cheap enough to do whenever the level moves. */
+  private refreshDormant(): void {
+    const level = this.world.level;
+    for (let s = 0; s < this.count; s++) {
+      if (!this.kind[s]) continue;
+      const wet = this.world.heightAt(this.bx[s], this.by[s]) < level ? 1 : 0;
+      this.dormant[s] = wet;
+      const role = this.roleOf[this.kind[s]];
+      if (wet && (role === ROLE_MINER || role === ROLE_MACHINE)) this.status[s] = STATUS_DORMANT;
+    }
   }
 
   private updateMiner(s: number): void {
@@ -733,7 +777,7 @@ export class Sim {
   /** Offers an item to whatever is on a tile. Returns whether it was taken. */
   private tryInsert(x: number, y: number, item: number, fromX: number, fromY: number): boolean {
     const t = this.world.buildingAt(x, y);
-    if (t < 0) return false;
+    if (t < 0 || this.dormant[t]) return false;
     switch (this.roleOf[this.kind[t]]) {
       case ROLE_BELT: {
         const d = this.dir[t];
@@ -800,6 +844,7 @@ export class Sim {
     const order = this.order;
     for (let i = 0; i < this.orderCount; i++) {
       const t = order[i];
+      if (this.dormant[t]) continue;
       const base = t * BELT_SLOTS;
       const d = this.dir[t];
       const x = this.bx[t];
@@ -854,7 +899,7 @@ export class Sim {
   /** Puts an item on the far end of a bridge, if this is a near end with a far end that has room. */
   private sendAcross(t: number, item: number): boolean {
     const far = this.bridgeLink[t];
-    if (far < 0) return false;
+    if (far < 0 || this.dormant[far]) return false;
     const base = far * BELT_SLOTS;
     if (this.slots[base] !== 0) return false;
     this.slots[base] = item;

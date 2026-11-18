@@ -7,12 +7,12 @@
 // agent loop, and directly by tests.
 
 import {
-  BUILDINGS, BUILDING_BY_ID, BUILDING_BY_KEY, GOALS, ITEMS, ITEM_BY_ID, ITEM_BY_KEY, MINER_SECONDS, RECIPES, TECHS, TECH_BY_KEY,
+  BUILDINGS, BUILDING_BY_ID, BUILDING_BY_KEY, GOALS, ITEMS, ITEM_BY_ID, ITEM_BY_KEY, MINER_SECONDS, RECIPES, TECHS, TECH_BY_KEY, TIDE_CYCLE_SECONDS,
   RECIPE_BY_ID, RECIPE_BY_KEY, TICKS_PER_SECOND, BELT_SLOTS, buildingId, type BuildingDef, type BuildingKey,
 } from '../content/content';
 import {
-  DX, DY, HUB_X, HUB_Y, ROLE_BELT, ROLE_BRIDGE, ROLE_CRATE, ROLE_FILTER, ROLE_HUB, ROLE_MACHINE, ROLE_MINER, ROLE_SPLITTER, STATUS_BLOCKED, STATUS_STARVED,
-  STATUS_WORKING, Sim, TERRAIN_LAND,
+  DX, DY, HUB_X, HUB_Y, ROLE_BELT, ROLE_BRIDGE, ROLE_CRATE, ROLE_FILTER, ROLE_HUB, ROLE_MACHINE, ROLE_MINER, ROLE_SPLITTER, STATUS_BLOCKED, STATUS_DORMANT, STATUS_STARVED,
+  STATUS_WORKING, Sim, TERRAIN_LAND, tideInfo,
 } from '../sim';
 
 /** Where the agent's actions land: a headless simulation or the live game. */
@@ -382,6 +382,7 @@ function statusText(sim: Sim, slot: number): string {
     case STATUS_WORKING: return 'working';
     case STATUS_STARVED: return 'waiting for inputs';
     case STATUS_BLOCKED: return 'output full';
+    case STATUS_DORMANT: return 'UNDER WATER, stopped until the tide goes out';
     default: return sim.role(slot) === ROLE_MACHINE && !sim.recipe[slot] ? 'no recipe' : 'not started';
   }
 }
@@ -432,6 +433,8 @@ function frontText(sim: Sim, slot: number): string {
 function getState(sim: Sim): string {
   const lines: string[] = [];
   lines.push(`Game time ${clock(sim.tick)}.`);
+  const tide = tideInfo(sim.tick);
+  lines.push(`Tide: ${tide.rising ? 'coming in' : 'going out'}, ${tide.rising ? 'high' : 'low'} water in ${clock(tide.ticksToTurn)}. It rises and falls once every ${TIDE_CYCLE_SECONDS / 60} minutes. Low ground floods at high water: buildings there stop and keep what they hold until it drops. The map view shows water as it is now.`);
   lines.push(goalText(sim));
   lines.push(`Hub stock (building materials): ${stockText(sim)}.`);
   const buildable = BUILDINGS.filter((b) => !b.fixed && sim.unlockedBuildings[b.id]);
