@@ -136,6 +136,10 @@ function TopRight({ game, state, ai }: { game: Game; state: UiState; ai: AiSessi
     <div className="top-right">
       <section className="panel controls">
         <span className="clock">{clock(state.seconds)}</span>
+        <span className="tide" title={`The tide is ${state.tide.rising ? 'coming in' : 'going out'}. ${state.tide.rising ? 'High' : 'Low'} water in ${clock(state.tide.toTurn)}.`}>
+          <span className="tide-gauge"><i style={{ height: `${Math.round(8 + 92 * state.tide.fraction)}%` }} /></span>
+          <span>{state.tide.rising ? 'Tide in' : 'Tide out'} {clock(state.tide.toTurn)}</span>
+        </span>
         <button className={state.paused ? 'active' : ''} onClick={() => game.togglePause()} title="Pause (Space)">
           {state.paused ? 'Paused' : 'Pause'}
         </button>

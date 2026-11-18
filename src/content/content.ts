@@ -206,6 +206,15 @@ export interface TechDef {
 // player likes. Tech id 0 means "none". Ids are stable: they are written into
 // saves. Every cost is more than the starting stock holds of that item, so a
 // tech can only be bought by a factory that is already delivering it.
+// The tide. Every tile has a height from 0 to 255 and is under water while its
+// height is below the water level, which rises from low to high and falls back
+// once a cycle.
+export const TIDE_LOW = 84;
+export const TIDE_HIGH = 100;
+export const TIDE_CYCLE_SECONDS = 40 * 60;
+/** Deposits lie on ground at or above this height, which was the fixed waterline before the tide moved. */
+export const DEPOSIT_MIN_HEIGHT = 92;
+
 /** Most items a crate holds. */
 export const CRATE_CAPACITY = 200;
 /** Most tiles a bridge can pass over between its two ends. */
