@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { TICKS_PER_SECOND, TIDE_CYCLE_SECONDS, TIDE_HIGH, TIDE_LOW, itemId } from '../src/content/content';
-import { HUB_X, HUB_Y, STATUS_DORMANT, Sim, TIDE_CYCLE_TICKS, loadSim, saveSim, tideInfo, tideLevel } from '../src/sim';
+import { HUB_X, HUB_Y, STATUS_DORMANT, Sim, TIDE_CYCLE_TICKS, flooding, loadSim, saveSim, tideInfo, tideLevel } from '../src/sim';
 import { BELT, CRATE, MINER, SOUTH, WEST, belts, place, run, slotAt } from './helpers';
 
 // The slope test map: dry round the hub, and east of it the ground climbs out
@@ -141,5 +141,44 @@ describe('a flooded factory', () => {
       run(loaded, TIDE_CYCLE_TICKS / 2);
       expect(loaded.hash()).toBe(sim.hash());
     }
+  });
+});
+
+describe('the forecast', () => {
+  it('says exactly when the water will arrive and leave, for every height', () => {
+    const sim = slope();
+    // Ask at several moments in the cycle, then run on and see whether it was right.
+    for (const start of [0, 7_001, TIDE_CYCLE_TICKS / 2 - 3, TIDE_CYCLE_TICKS / 2 + 4_444, TIDE_CYCLE_TICKS - 10]) {
+      run(sim, start - (sim.tick % TIDE_CYCLE_TICKS) + (start < sim.tick % TIDE_CYCLE_TICKS ? TIDE_CYCLE_TICKS : 0));
+      for (const height of [TIDE_LOW, 87, 92, 96, TIDE_HIGH - 1]) {
+        const f = flooding(height, sim.tick);
+        const x = xAt(height);
+        expect(f.kind).toBe('tidal');
+        // What the forecast says of now is what the map says of now.
+        expect(f.wet).toBe(sim.world.terrainAt(x, ROW) === 1);
+        // One tick before the change the tile is as it is now; at the change it has flipped.
+        const probe = new Sim({ seed: 5, worldType: 'slope' });
+        probe.tick = sim.tick;
+        probe.rebuildDerived();
+        run(probe, f.ticksToChange - 1);
+        expect(probe.world.terrainAt(x, ROW) === 1).toBe(f.wet);
+        run(probe, 1);
+        expect(probe.world.terrainAt(x, ROW) === 1).toBe(!f.wet);
+      }
+    }
+  });
+
+  it('adds up: time under water and time dry make one cycle', () => {
+    for (let height = TIDE_LOW; height < TIDE_HIGH; height++) {
+      const f = flooding(height, 0);
+      expect(f.wet).toBe(false);
+      const later = flooding(height, f.ticksToChange);
+      expect(later.wet).toBe(true);
+      expect(later.ticksToChange).toBe(f.wetTicks);
+      // Lower ground is under water for longer.
+      if (height > TIDE_LOW) expect(f.wetTicks).toBeLessThan(flooding(height - 1, 0).wetTicks);
+    }
+    expect(flooding(TIDE_LOW - 1, 0).kind).toBe('water');
+    expect(flooding(TIDE_HIGH, 0).kind).toBe('dry');
   });
 });

@@ -35,6 +35,7 @@ Then open http://localhost:5173.
 | Copy an area | C, then drag over the buildings. Recipes are copied too |
 | Paste | Click, as many times as you like. V brings the last copy back; R turns it |
 | Undo, redo | Z and Shift+Z, or Ctrl/Cmd+Z and Shift+Ctrl/Cmd+Z |
+| Tide forecast | T |
 | Inspect a building, choose a recipe | Left click it with no tool selected |
 | Cancel | Esc |
 | Pause | Space. You can build while paused |
@@ -80,6 +81,10 @@ Then open http://localhost:5173.
   stops, keeps what it holds, and carries on when the water drops. Nothing can
   be placed on water, but a flooded building can still be removed. The gauge
   by the clock shows how high the water is and how long until it turns.
+- **The forecast.** Press T, or the Forecast button, to colour tidal ground by
+  how soon the water reaches it. Pointing at a tile says when it floods and for
+  how long in each cycle. A building you are about to place on tidal ground
+  shows amber with the same warning. Everything standing in water turns blue.
 - **Blue means in, orange means out.** Every building has glowing blue arrows
   on the sides it takes items from and an orange arrow where it pushes them
   out. Larger floating arrows show the same thing on the building you are

@@ -4,12 +4,12 @@
 
 import {
   BRIDGE_SPAN, BUILDINGS, BUILDING_BY_ID, CRATE_CAPACITY, FINAL_STAGE, GOALS, ITEMS, ITEM_BY_ID, ITEM_BY_KEY, RECIPES, RECIPE_BY_ID, RECIPE_BY_KEY, TECHS, TECH_BY_ID, TECH_BY_KEY,
-  TICKS_PER_SECOND, TIDE_HIGH, TIDE_LOW, buildingId, type BuildingDef,
+  TICKS_PER_SECOND, TIDE_CYCLE_SECONDS, TIDE_HIGH, TIDE_LOW, buildingId, type BuildingDef,
 } from './content/content';
 import { GameRenderer } from './render/renderer';
 import {
   DX, DY, HUB_X, HUB_Y, ROLE_BRIDGE, ROLE_CRATE, ROLE_FILTER, ROLE_HUB, ROLE_MACHINE, ROLE_MINER, STATUS_BLOCKED, STATUS_IDLE, STATUS_STARVED, STATUS_WORKING,
-  Sim, loadSim, saveSim, tideInfo,
+  Sim, flooding, loadSim, saveSim, tideInfo,
 } from './sim';
 import { readSave, writeSave } from './storage';
 import type { AgentHost, StagedStep } from './agent/tools';
@@ -76,6 +76,10 @@ export interface UiState {
   seconds: number;
   /** The tide: how far up its range the water is (0 low, 1 high), which way it is going, and seconds until it turns. */
   tide: { fraction: number; rising: boolean; toTurn: number };
+  /** The colours that show how soon tidal ground floods are switched on. */
+  forecast: boolean;
+  /** A warning about the ground under what is being placed, or empty. */
+  placeNote: string;
   stage: string;
   goalNumber: number;
   goalCount: number;
@@ -138,6 +142,11 @@ function hex(color: number): string {
   return '#' + color.toString(16).padStart(6, '0');
 }
 
+function minutes(ticks: number): string {
+  const s = Math.ceil(ticks / TICKS_PER_SECOND);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
 function recipeText(id: number): string {
   const r = RECIPE_BY_ID[id];
   if (!r) return '';
@@ -172,6 +181,7 @@ export class Game {
   private hover: { x: number; y: number } | null = null;
   private selected: { x: number; y: number } | null = null;
   private readonly keys = new Set<string>();
+  private forecast = false;
   private readonly history = new History(() => this.sim);
   private clipboard: Clip[] = [];
   /** Quarter turns applied to the clipboard before it is pasted. */
@@ -520,6 +530,20 @@ export class Game {
     this.sincePublish = 1;
   }
 
+  toggleForecast(): void {
+    this.forecast = !this.forecast;
+    this.renderer.setForecast(this.forecast);
+    this.publish();
+  }
+
+  /** What the tide will do to a tile, in words, or empty for ground that never floods. */
+  private tideNote(x: number, y: number): string {
+    const f = flooding(this.sim.world.heightAt(x, y), this.sim.tick);
+    if (f.kind !== 'tidal') return '';
+    const share = `Under water ${minutes(f.wetTicks)} of every ${minutes(TIDE_CYCLE_SECONDS * TICKS_PER_SECOND)}`;
+    return f.wet ? `Dry again in ${minutes(f.ticksToChange)}. ${share}` : `Floods in ${minutes(f.ticksToChange)}. ${share}`;
+  }
+
   undo(): void {
     const result = this.history.undo();
     if (!result) this.warn('Nothing to undo.');
@@ -745,6 +769,9 @@ export class Game {
       case 'KeyV':
         this.setTool(this.tool.mode === 'paste' ? { mode: 'none' } : { mode: 'paste' });
         break;
+      case 'KeyT':
+        this.toggleForecast();
+        break;
       case 'KeyQ':
         this.renderer.rig.rotate(-1);
         break;
@@ -807,14 +834,18 @@ export class Game {
   }
 
   /** The clipboard as it would land with its middle on `tile`, turned by the paste rotation. */
-  private pasteGhosts(tile: { x: number; y: number }): { building: number; x: number; y: number; dir: number; recipe: number; ok: boolean }[] {
+  private pasteGhosts(tile: { x: number; y: number }): { building: number; x: number; y: number; dir: number; recipe: number; ok: boolean; warn: boolean }[] {
     return this.clipboard.map((c) => {
       let dx = c.dx;
       let dy = c.dy;
       for (let t = 0; t < this.pasteTurns; t++) [dx, dy] = [-dy, dx];
       const x = tile.x + dx;
       const y = tile.y + dy;
-      return { building: c.building, x, y, dir: (c.dir + this.pasteTurns) & 3, recipe: c.recipe, ok: this.sim.placeError(c.building, x, y) === null };
+      return {
+        building: c.building, x, y, dir: (c.dir + this.pasteTurns) & 3, recipe: c.recipe,
+        ok: this.sim.placeError(c.building, x, y) === null,
+        warn: this.sim.world.heightAt(x, y) < TIDE_HIGH,
+      };
     });
   }
 
@@ -894,8 +925,9 @@ export class Game {
     const hover = this.hover;
     if (this.tool.mode === 'build' && hover) {
       const ok = this.sim.placeError(this.tool.building, hover.x, hover.y) === null;
-      this.renderer.setGhost({ building: this.tool.building, x: hover.x, y: hover.y, dir: this.toolDir, ok });
-      this.renderer.setCursor(hover, ok ? 0x7dffa0 : 0xff5a5a);
+      const warn = this.sim.world.heightAt(hover.x, hover.y) < TIDE_HIGH;
+      this.renderer.setGhost({ building: this.tool.building, x: hover.x, y: hover.y, dir: this.toolDir, ok, warn });
+      this.renderer.setCursor(hover, !ok ? 0xff5a5a : warn ? 0xffc04d : 0x7dffa0);
     } else {
       this.renderer.setGhost(null);
       this.renderer.setCursor(hover, this.tool.mode === 'delete' ? 0xff5a5a : this.tool.mode === 'copy' ? 0x8fd3ff : 0xffffff);
@@ -963,6 +995,8 @@ export class Game {
       paused: this.paused,
       aiActive: this.aiActive,
       seconds: Math.floor(sim.tick / TICKS_PER_SECOND),
+      forecast: this.forecast,
+      placeNote: (this.tool.mode === 'build' || this.tool.mode === 'paste') && this.hover ? this.tideNote(this.hover.x, this.hover.y) : '',
       tide: {
         fraction: (tide.level - TIDE_LOW) / (TIDE_HIGH - TIDE_LOW),
         rising: tide.rising,
@@ -1028,15 +1062,19 @@ export class Game {
     const h = this.hover;
     if (!h || !this.sim.world.hasTile(h.x, h.y)) return '';
     const slot = this.sim.world.buildingAt(h.x, h.y);
-    if (slot >= 0) return BUILDING_BY_ID[this.sim.kind[slot]]?.name ?? '';
-    const deposit = this.sim.world.depositAt(h.x, h.y);
-    if (deposit) {
-      const locked = this.sim.unlockedResources[deposit] ? '' : ' (not usable yet)';
-      return `${ITEM_BY_ID[deposit]?.name ?? ''} deposit${locked}`;
+    if (slot >= 0) {
+      const tide = this.tideNote(h.x, h.y);
+      return (BUILDING_BY_ID[this.sim.kind[slot]]?.name ?? '') + (tide ? `. ${tide}` : '');
     }
-    const height = this.sim.world.heightAt(h.x, h.y);
-    if (this.sim.world.terrainAt(h.x, h.y) !== 0) return height < TIDE_LOW ? 'Water' : 'Water. This ground is dry at low tide';
-    return height < TIDE_HIGH ? 'Open ground. The tide covers it at high water' : 'Open ground';
+    const deposit = this.sim.world.depositAt(h.x, h.y);
+    if (deposit && this.sim.world.terrainAt(h.x, h.y) === 0) {
+      const locked = this.sim.unlockedResources[deposit] ? '' : ' (not usable yet)';
+      const tide = this.tideNote(h.x, h.y);
+      return `${ITEM_BY_ID[deposit]?.name ?? ''} deposit${locked}${tide ? `. ${tide}` : ''}`;
+    }
+    const note = this.tideNote(h.x, h.y);
+    if (this.sim.world.terrainAt(h.x, h.y) !== 0) return note ? `Water over tidal ground. ${note}` : 'Water';
+    return note ? `Tidal ground. ${note}` : 'Open ground';
   }
 
   private describeSelected(): UiState['selected'] {

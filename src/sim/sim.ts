@@ -674,11 +674,7 @@ export class Sim {
     // 1. Commands stamped for this tick, in the order they were issued.
     this.applyQueued();
 
-    // 2. Once a second: the tide. Buildings the water reaches go dormant, and
-    //    the ones it leaves wake.
-    if (this.tick % TICKS_PER_SECOND === 0) this.updateTide();
-
-    // 3. Machines and miners do their work, in slot order.
+    // 2. Machines and miners do their work, in slot order.
     const count = this.count;
     for (let s = 0; s < count; s++) {
       if (this.dormant[s]) continue;
@@ -687,7 +683,7 @@ export class Sim {
       else if (role === ROLE_MACHINE) this.updateMachine(s);
     }
 
-    // 4. Belts advance from the downstream end backwards, then machines put
+    // 3. Belts advance from the downstream end backwards, then machines put
     //    finished items out. Both happen on the belt beat so items move together.
     if (this.tick % this.beltPeriod === 0) {
       this.transportStep();
@@ -703,10 +699,15 @@ export class Sim {
       this.lastBeltStepTick = this.tick + 1;
     }
 
-    // 5. Once a second: the town.
+    // 4. Once a second: the town.
     if (this.tick % TICKS_PER_SECOND === 0) this.updateTown();
 
     this.tick++;
+
+    // 6. The tide, for the tick that is about to start, so the water level always
+    //    matches the clock. Buildings the water reaches go dormant, and the ones
+    //    it leaves wake. The level moves about once a minute.
+    this.updateTide();
   }
 
   /** Whether the building in `slot` is standing in water. */

@@ -140,6 +140,9 @@ function TopRight({ game, state, ai }: { game: Game; state: UiState; ai: AiSessi
           <span className="tide-gauge"><i style={{ height: `${Math.round(8 + 92 * state.tide.fraction)}%` }} /></span>
           <span>{state.tide.rising ? 'Tide in' : 'Tide out'} {clock(state.tide.toTurn)}</span>
         </span>
+        <button className={state.forecast ? 'active' : ''} onClick={() => game.toggleForecast()} title="Colour tidal ground by how soon the water reaches it (T)">
+          Forecast
+        </button>
         <button className={state.paused ? 'active' : ''} onClick={() => game.togglePause()} title="Pause (Space)">
           {state.paused ? 'Paused' : 'Pause'}
         </button>
@@ -199,6 +202,16 @@ function BuildBar({ game, state }: { game: Game; state: UiState }) {
   return (
     <div className="bottom">
       {state.message && <div className="message">{state.message}</div>}
+      {state.placeNote && <div className="message tide-note">This ground is tidal. {state.placeNote}.</div>}
+      {state.forecast && (
+        <div className="forecast-key">
+          <span>Water arrives in</span>
+          <span><i style={{ background: '#f23326' }} />under 2 min</span>
+          <span><i style={{ background: '#ff8c1a' }} />under 5</span>
+          <span><i style={{ background: '#fad933' }} />under 10</span>
+          <span><i style={{ background: '#59cc73' }} />longer</span>
+        </div>
+      )}
       <div className="hint">
         {active
           ? `${active.hint} Costs ${active.cost.map((c) => `${c.count} ${c.name.toLowerCase()}`).join(' + ')}. Facing ${ARROWS[state.toolDir]}, R turns it.`
@@ -270,7 +283,7 @@ function BuildBar({ game, state }: { game: Game; state: UiState }) {
         <span><i className="port out" />orange: items come out</span>
       </div>
       <div className="keys">
-        WASD move · wheel zoom · Q/E turn view · R rotate · F pick building · C copy area · V paste · Z undo · right-click remove · Esc cancel · Space pause
+        WASD move · wheel zoom · Q/E turn view · R rotate · F pick building · C copy area · V paste · Z undo · T tide forecast · right-click remove · Esc cancel · Space pause
       </div>
     </div>
   );
